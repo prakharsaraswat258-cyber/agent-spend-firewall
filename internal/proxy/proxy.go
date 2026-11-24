@@ -17,6 +17,7 @@ import (
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/loop"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
 )
 
@@ -81,6 +82,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if run == "" {
 		run = p.DefaultRun
+	}
+	if lr := loop.Detect(body); lr.Count >= loop.Warn {
+		action := "warned"
+		if lr.Count >= loop.Stop {
+			action = "stopped"
+		}
+		if err := p.Ledger.RecordLoop(run, lr.Kind, lr.Tool, lr.Count, action); err != nil {
+			log.Printf("pitstop: loop alert write failed: %v", err)
+		}
+		if action == "stopped" {
+			fail(w, provider, 429, fmt.Sprintf("Pitstop stopped a loop: %s %q repeated %d times. Change approach or start a new run.", lr.Kind, lr.Tool, lr.Count))
+			return
+		}
 	}
 	if err := p.Guard.Reserve(run, need); err != nil {
 		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error())

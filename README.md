@@ -20,5 +20,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - `pitstop run -- claude`: registers a run (repo + branch auto-detected), points the agent at the proxy via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` with the run id in the URL path.
 - `pitstop runs`: recent runs with calls and cost.
 
-Not yet: pause card, forecast, checkpoint, loop detector, dashboard, per-run budgets, Codex hook check.
+- Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 429. Reads the request history, keeps only tool names.
+
+Not yet: pause card, forecast, checkpoint, "no code change in N steps" signal, dashboard, per-run budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.

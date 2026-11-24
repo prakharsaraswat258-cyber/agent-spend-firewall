@@ -104,3 +104,30 @@ func TestRunIDInPath(t *testing.T) {
 		t.Fatalf("run abc cost %d", got)
 	}
 }
+
+func TestLoopStoppedAtFive(t *testing.T) {
+	px, l := setup(t, 0)
+	send := func(n int) int {
+		var ms []string
+		for i := 0; i < n; i++ {
+			ms = append(ms, `{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"c":"ls"}}]}`,
+				`{"role":"user","content":[{"type":"tool_result","content":"x"}]}`)
+		}
+		resp, _ := http.Post(px.URL+"/run/lp/v1/messages", "application/json",
+			strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":10,"messages":[`+strings.Join(ms, ",")+`]}`))
+		return resp.StatusCode
+	}
+	if c := send(4); c != 200 {
+		t.Fatalf("4 repeats must warn only, got %d", c)
+	}
+	if c := send(5); c != 429 {
+		t.Fatalf("5 repeats must stop, got %d", c)
+	}
+	rs, _ := l.Runs(10)
+	for _, r := range rs {
+		if r.ID == "lp" && r.Loops == 2 {
+			return
+		}
+	}
+	t.Fatalf("want 2 alerts on run lp: %+v", rs)
+}

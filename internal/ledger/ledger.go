@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS calls(
  id INTEGER PRIMARY KEY, run_id TEXT, provider TEXT, model TEXT,
  input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER,
  cost_micro INTEGER, latency_ms INTEGER, at INTEGER);
+CREATE TABLE IF NOT EXISTS loop_alerts(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, kind TEXT, tool TEXT, repeats INTEGER, action TEXT);
 CREATE INDEX IF NOT EXISTS calls_run ON calls(run_id);
 CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	if err != nil {
@@ -68,7 +69,7 @@ func (l *Ledger) sum(q string, a any) (int64, error) {
 type Run struct {
 	ID, Repo, Branch, Agent string
 	Started                 time.Time
-	CostMicro, Calls        int64
+	CostMicro, Calls, Loops int64
 }
 
 // StartRun registers a run with auto-detected context. Safe to call twice.
@@ -81,7 +82,8 @@ func (l *Ledger) StartRun(r Run) error {
 // Runs lists newest first with total cost and call count.
 func (l *Ledger) Runs(limit int) ([]Run, error) {
 	rows, err := l.db.Query(`SELECT r.id, COALESCE(r.repo,''), COALESCE(r.branch,''), COALESCE(r.agent,''), r.started,
- COALESCE(SUM(c.cost_micro),0), COUNT(c.id)
+ COALESCE(SUM(c.cost_micro),0), COUNT(c.id),
+ (SELECT COUNT(*) FROM loop_alerts a WHERE a.run_id=r.id)
 FROM runs r LEFT JOIN calls c ON c.run_id=r.id GROUP BY r.id ORDER BY r.started DESC, r.rowid DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -91,11 +93,22 @@ FROM runs r LEFT JOIN calls c ON c.run_id=r.id GROUP BY r.id ORDER BY r.started 
 	for rows.Next() {
 		var r Run
 		var t int64
-		if err := rows.Scan(&r.ID, &r.Repo, &r.Branch, &r.Agent, &t, &r.CostMicro, &r.Calls); err != nil {
+		if err := rows.Scan(&r.ID, &r.Repo, &r.Branch, &r.Agent, &t, &r.CostMicro, &r.Calls, &r.Loops); err != nil {
 			return nil, err
 		}
 		r.Started = time.Unix(t, 0)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// RecordLoop stores a loop alert. Metadata only: tool name, never inputs.
+func (l *Ledger) RecordLoop(run, kind, tool string, repeats int, action string) error {
+	_, err := l.db.Exec(`INSERT OR IGNORE INTO runs(id,started) VALUES(?,?)`, run, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	_, err = l.db.Exec(`INSERT INTO loop_alerts(run_id,at,kind,tool,repeats,action) VALUES(?,?,?,?,?,?)`,
+		run, time.Now().Unix(), kind, tool, repeats, action)
+	return err
 }
