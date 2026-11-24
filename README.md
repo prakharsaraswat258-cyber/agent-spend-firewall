@@ -33,5 +33,5 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.
 
-Not yet: checkpoint, "no code change in N steps" signal, dashboard, per-run budgets, Codex hook check.
+Not yet: "no code change in N steps" signal, dashboard, Telegram/phone channel, forecast accuracy score, per-repo budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.
