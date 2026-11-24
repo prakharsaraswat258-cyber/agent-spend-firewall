@@ -34,10 +34,12 @@ func main() {
 		os.Exit(checkpointCmd(cfg, os.Args[2:]))
 	case "resume":
 		os.Exit(resumeCmd(cfg, os.Args[2:]))
+	case "status":
+		os.Exit(statusCmd(cfg, os.Args[2:]))
 	case "runs":
 		os.Exit(runsCmd(cfg))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run>")
+		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run]")
 		os.Exit(2)
 	}
 }

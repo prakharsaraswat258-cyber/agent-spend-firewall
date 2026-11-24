@@ -165,3 +165,14 @@ func TestLoopStopSavesWork(t *testing.T) {
 		t.Fatalf("wip branch content %q", out)
 	}
 }
+
+func TestProgressTracked(t *testing.T) {
+	px, l := setup(t, 0)
+	todos := `{"todos":[{"status":"completed"},{"status":"completed"},{"status":"completed"},{"status":"pending"},{"status":"pending"}]}`
+	http.Post(px.URL+"/run/pg/v1/messages", "application/json", strings.NewReader(
+		`{"model":"claude-sonnet-4","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"TodoWrite","input":`+todos+`}]}]}`))
+	r, err := l.GetRun("pg")
+	if err != nil || r.StepsDone != 3 || r.StepsTotal != 5 {
+		t.Fatalf("%+v %v", r, err)
+	}
+}

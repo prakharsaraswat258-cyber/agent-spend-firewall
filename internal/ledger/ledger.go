@@ -25,7 +25,8 @@ func Open(path string) (*Ledger, error) {
 	}
 	db.SetMaxOpenConns(1) // sqlite: one writer
 	_, err = db.Exec(`
-CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT, dir TEXT, session_id TEXT);
+CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT, dir TEXT, session_id TEXT, steps_done INTEGER, steps_total INTEGER);
+CREATE TABLE IF NOT EXISTS forecasts(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, spent_micro INTEGER, p50_micro INTEGER, p90_micro INTEGER, confidence TEXT, steps_done INTEGER, steps_total INTEGER);
 CREATE TABLE IF NOT EXISTS checkpoints(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, branch TEXT, commit_sha TEXT, reason TEXT);
 CREATE TABLE IF NOT EXISTS calls(
  id INTEGER PRIMARY KEY, run_id TEXT, provider TEXT, model TEXT,
@@ -36,6 +37,10 @@ CREATE INDEX IF NOT EXISTS calls_run ON calls(run_id);
 CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	if err != nil {
 		return nil, err
+	}
+	// Older ledgers lack newer run columns; duplicate-column errors are expected and ignored.
+	for _, c := range []string{"repo TEXT", "branch TEXT", "agent TEXT", "dir TEXT", "session_id TEXT", "steps_done INTEGER", "steps_total INTEGER"} {
+		db.Exec("ALTER TABLE runs ADD COLUMN " + c)
 	}
 	return &Ledger{db}, nil
 }
@@ -69,6 +74,7 @@ func (l *Ledger) sum(q string, a any) (int64, error) {
 
 type Run struct {
 	ID, Repo, Branch, Agent, Dir, SessionID string
+	StepsDone, StepsTotal                   int
 	Started                                 time.Time
 	CostMicro, Calls, Loops                 int64
 }
@@ -118,8 +124,8 @@ func (l *Ledger) RecordLoop(run, kind, tool string, repeats int, action string) 
 func (l *Ledger) GetRun(id string) (Run, error) {
 	r := Run{ID: id}
 	var t int64
-	err := l.db.QueryRow(`SELECT COALESCE(repo,''),COALESCE(branch,''),COALESCE(agent,''),COALESCE(dir,''),COALESCE(session_id,''),started FROM runs WHERE id=?`, id).
-		Scan(&r.Repo, &r.Branch, &r.Agent, &r.Dir, &r.SessionID, &t)
+	err := l.db.QueryRow(`SELECT COALESCE(repo,''),COALESCE(branch,''),COALESCE(agent,''),COALESCE(dir,''),COALESCE(session_id,''),started,COALESCE(steps_done,0),COALESCE(steps_total,0) FROM runs WHERE id=?`, id).
+		Scan(&r.Repo, &r.Branch, &r.Agent, &r.Dir, &r.SessionID, &t, &r.StepsDone, &r.StepsTotal)
 	r.Started = time.Unix(t, 0)
 	return r, err
 }
@@ -139,4 +145,43 @@ func (l *Ledger) SaveCheckpoint(run, branch, commit, reason string) error {
 func (l *Ledger) LastCheckpoint(run string) (branch, commit string) {
 	l.db.QueryRow(`SELECT branch,commit_sha FROM checkpoints WHERE run_id=? ORDER BY id DESC LIMIT 1`, run).Scan(&branch, &commit)
 	return
+}
+
+// SetProgress stores the agent's plan state; changed is true when it differs from before.
+func (l *Ledger) SetProgress(run string, done, total int) (changed bool, err error) {
+	if _, err = l.db.Exec(`INSERT OR IGNORE INTO runs(id,started) VALUES(?,?)`, run, time.Now().Unix()); err != nil {
+		return false, err
+	}
+	res, err := l.db.Exec(`UPDATE runs SET steps_done=?, steps_total=? WHERE id=? AND (COALESCE(steps_done,-1)<>? OR COALESCE(steps_total,-1)<>?)`,
+		done, total, run, done, total)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// CallCosts returns per-call costs in call order.
+func (l *Ledger) CallCosts(run string) ([]int64, error) {
+	rows, err := l.db.Query(`SELECT cost_micro FROM calls WHERE run_id=? ORDER BY id`, run)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var c int64
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SaveForecast keeps every forecast shown, so accuracy can be scored when the run ends.
+func (l *Ledger) SaveForecast(run string, spent, p50, p90 int64, conf string, done, total int) error {
+	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p50_micro,p90_micro,confidence,steps_done,steps_total) VALUES(?,?,?,?,?,?,?,?)`,
+		run, time.Now().Unix(), spent, p50, p90, conf, done, total)
+	return err
 }

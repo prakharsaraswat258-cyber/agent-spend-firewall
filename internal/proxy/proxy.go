@@ -18,9 +18,11 @@ import (
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/checkpoint"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/loop"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/progress"
 )
 
 const defaultMaxOutput = 32000 // used when the request sets no max tokens
@@ -49,6 +51,23 @@ func (p *Proxy) save(run, reason string) string {
 	}
 	_ = p.Ledger.SaveCheckpoint(run, br, c, reason)
 	return fmt.Sprintf(" Work saved on branch %s. Resume: pitstop resume %s", br, run)
+}
+
+// trackProgress stores the agent's plan state and saves a forecast whenever a step completes.
+func (p *Proxy) trackProgress(run string, body []byte) {
+	pr := progress.Parse(body)
+	if !pr.Found {
+		return
+	}
+	changed, err := p.Ledger.SetProgress(run, pr.Done, pr.Total)
+	if err != nil || !changed {
+		return
+	}
+	spent, _ := p.Ledger.SpentRun(run)
+	costs, _ := p.Ledger.CallCosts(run)
+	if f := forecast.Compute(spent, costs, pr.Done, pr.Total); f.HasPlan {
+		_ = p.Ledger.SaveForecast(run, spent, f.P50, f.P90, f.Confidence, pr.Done, pr.Total)
+	}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +125,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if m := sessionRe.FindSubmatch(body); m != nil {
 			_ = p.Ledger.SetSession(run, string(m[1])) // lets resume reopen the same Claude Code session
 		}
+	}
+	if provider == "anthropic" {
+		p.trackProgress(run, body)
 	}
 	if lr := loop.Detect(body); lr.Count >= loop.Warn {
 		action := "warned"
