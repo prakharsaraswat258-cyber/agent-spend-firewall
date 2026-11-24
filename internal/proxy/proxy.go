@@ -32,6 +32,12 @@ type Proxy struct {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// /run/<id>/... carries the run id in the base URL, so any tool with a base-URL setting works.
+	runID := ""
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/run/"); ok {
+		id, path, _ := strings.Cut(rest, "/")
+		runID, r.URL.Path = id, "/"+path
+	}
 	var provider string
 	var target *url.URL
 	switch {
@@ -69,7 +75,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// bytes/3 over-counts tokens: safe upper bound for reservation.
 	need := entry.MaxCost(int64(len(body))/3+1, maxOut)
 
-	run := r.Header.Get("X-Pitstop-Run")
+	run := runID
+	if run == "" {
+		run = r.Header.Get("X-Pitstop-Run")
+	}
 	if run == "" {
 		run = p.DefaultRun
 	}

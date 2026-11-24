@@ -87,3 +87,20 @@ func TestUnknownModelBlocked(t *testing.T) {
 		t.Fatal(resp.StatusCode)
 	}
 }
+
+func TestRunIDInPath(t *testing.T) {
+	px, l := setup(t, 0)
+	resp, _ := http.Post(px.URL+"/run/abc/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":10,"stream":true}`))
+	if resp.StatusCode != 200 {
+		t.Fatal(resp.StatusCode)
+	}
+	var got int64
+	for i := 0; i < 100 && got == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		got, _ = l.SpentRun("abc")
+	}
+	if got != 11475 {
+		t.Fatalf("run abc cost %d", got)
+	}
+}

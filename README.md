@@ -15,5 +15,10 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - Unknown model: HTTP 400 with fix. Keys and prompts are never stored; ledger is metadata only.
 - Header `X-Pitstop-Run` groups calls into runs; default is one run per `serve`.
 
-Not yet: pause card, forecast, checkpoint, loop detector, dashboard, init command.
+## Commands
+- `pitstop init [--budget USD]`: saves `~/.pitstop/config.json`, detects claude/codex/aider. Edits no agent config.
+- `pitstop run -- claude`: registers a run (repo + branch auto-detected), points the agent at the proxy via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` with the run id in the URL path.
+- `pitstop runs`: recent runs with calls and cost.
+
+Not yet: pause card, forecast, checkpoint, loop detector, dashboard, per-run budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.
