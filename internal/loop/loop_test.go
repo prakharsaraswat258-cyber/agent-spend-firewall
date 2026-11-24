@@ -59,3 +59,23 @@ func TestNoLoopAndGarbage(t *testing.T) {
 		t.Fatal("false positive")
 	}
 }
+
+func TestPersonSpeakingResetsStreak(t *testing.T) {
+	b := strings.TrimSuffix(string(anth(5, `{"x":1}`, "")), `]}`)
+	resumed := b + `,{"role":"user","content":"tests need the env var, try another way"}]}`
+	if r := Detect([]byte(resumed)); r.Count != 0 {
+		t.Fatalf("string message: %+v", r)
+	}
+	// Claude Code may merge the typed text into the tool-result message.
+	merged := strings.TrimSuffix(string(anth(4, `{"x":1}`, "")), `]}`) +
+		`,{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"x":1}}]}` +
+		`,{"role":"user","content":[{"type":"tool_result","content":"x"},{"type":"text","text":"stop, use make instead"}]}]}`
+	if r := Detect([]byte(merged)); r.Count != 0 {
+		t.Fatalf("merged message: %+v", r)
+	}
+	// Injected reminders are not a person: the loop still counts.
+	reminder := b + `,{"role":"user","content":[{"type":"text","text":"<system-reminder>todo list empty</system-reminder>"}]}]}`
+	if r := Detect([]byte(reminder)); r.Count != 5 {
+		t.Fatalf("reminder must not reset: %+v", r)
+	}
+}

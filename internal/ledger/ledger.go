@@ -13,9 +13,13 @@ type Ledger struct{ db *sql.DB }
 type Call struct {
 	RunID, Provider, Model               string
 	Input, Output, CacheRead, CacheWrite int64
+	CacheWrite1h                         int64
 	CostMicro                            int64
 	LatencyMS                            int64
 	At                                   time.Time
+	// Estimated: the stream was cut off before the provider's final usage event,
+	// so some token counts were estimated on the high side.
+	Estimated bool
 }
 
 func Open(path string) (*Ledger, error) {
@@ -39,9 +43,12 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	if err != nil {
 		return nil, err
 	}
-	// Older ledgers lack newer run columns; duplicate-column errors are expected and ignored.
+	// Older ledgers lack newer columns; duplicate-column errors are expected and ignored.
 	for _, c := range []string{"repo TEXT", "branch TEXT", "agent TEXT", "dir TEXT", "session_id TEXT", "steps_done INTEGER", "steps_total INTEGER", "ended INTEGER", "outcome TEXT"} {
 		db.Exec("ALTER TABLE runs ADD COLUMN " + c)
+	}
+	for _, c := range []string{"cache_write_1h INTEGER NOT NULL DEFAULT 0", "estimated INTEGER NOT NULL DEFAULT 0"} {
+		db.Exec("ALTER TABLE calls ADD COLUMN " + c)
 	}
 	return &Ledger{db}, nil
 }
@@ -53,9 +60,9 @@ func (l *Ledger) Record(c Call) error {
 	if err != nil {
 		return err
 	}
-	_, err = l.db.Exec(`INSERT INTO calls(run_id,provider,model,input,output,cache_read,cache_write,cost_micro,latency_ms,at)
-VALUES(?,?,?,?,?,?,?,?,?,?)`, c.RunID, c.Provider, c.Model, c.Input, c.Output, c.CacheRead, c.CacheWrite,
-		c.CostMicro, c.LatencyMS, c.At.Unix())
+	_, err = l.db.Exec(`INSERT INTO calls(run_id,provider,model,input,output,cache_read,cache_write,cache_write_1h,cost_micro,latency_ms,at,estimated)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, c.RunID, c.Provider, c.Model, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.CacheWrite1h,
+		c.CostMicro, c.LatencyMS, c.At.Unix(), c.Estimated)
 	return err
 }
 
@@ -205,12 +212,14 @@ type CallRow struct {
 	At                                   int64
 	Model                                string
 	Input, Output, CacheRead, CacheWrite int64
+	CacheWrite1h                         int64
 	CostMicro                            int64
+	Estimated                            bool
 }
 
 // Calls returns the newest calls of a run (metadata only).
 func (l *Ledger) Calls(run string, limit int) ([]CallRow, error) {
-	rows, err := l.db.Query(`SELECT at,model,input,output,cache_read,cache_write,cost_micro FROM calls WHERE run_id=? ORDER BY id DESC LIMIT ?`, run, limit)
+	rows, err := l.db.Query(`SELECT at,model,input,output,cache_read,cache_write,cache_write_1h,cost_micro,estimated FROM calls WHERE run_id=? ORDER BY id DESC LIMIT ?`, run, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +227,7 @@ func (l *Ledger) Calls(run string, limit int) ([]CallRow, error) {
 	var out []CallRow
 	for rows.Next() {
 		var c CallRow
-		if err := rows.Scan(&c.At, &c.Model, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.CostMicro); err != nil {
+		if err := rows.Scan(&c.At, &c.Model, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.CacheWrite1h, &c.CostMicro, &c.Estimated); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

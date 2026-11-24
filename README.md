@@ -9,7 +9,10 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:4546   # Claude Code / SDK
 export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 ```
 
-- Streaming pass-through for `/v1/messages`, `/v1/chat/completions`, `/v1/responses`.
+- Streaming pass-through for `POST /v1/messages`, `/v1/chat/completions`, `/v1/responses`. Free calls (reads, `count_tokens`, `input_tokens`, cancels) pass unmetered. Any other POST (Batch API, embeddings, images, audio, legacy completions) is blocked with a 400, because Pitstop cannot price it yet.
+- A response cut off mid-stream (Ctrl-C, dropped connection) is still billed: input as reported, output estimated high from the text streamed, and the call is marked `estimated` in the ledger.
+- Anthropic 1-hour cache writes are billed at their own rate (2x input unless `cache_write_1h` is set in the price table).
+- If a ledger write fails, every later call is blocked (HTTP 503) until restart, so nothing goes out unmetered.
 - Cost in integer micro-dollars from `internal/price/prices.json`, copied from the Anthropic and OpenAI pricing pages on 2026-11-24. Anthropic model IDs follow the `claude-<family>-<major>-<minor>` pattern and were not listed on the page.
 - Each call reserves worst-case cost first; run/day/month caps cannot be jointly overshot. Over cap: HTTP 403 (not 429, which SDKs retry).
 - Unknown model: HTTP 400 with fix. Prices match the exact model ID or the ID plus a date suffix (`-20250929`, `-2024-07-18`), never a looser prefix. Haiku 5.5's long-prompt tier (over 100K tokens) is priced; OpenAI long-context rates (over 272K) are not.
@@ -19,15 +22,15 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 ## Commands
 - `pitstop init [--budget USD]`: saves `~/.pitstop/config.json`, detects claude/codex/aider. Edits no agent config.
-- `pitstop run -- claude`: registers a run (repo + branch auto-detected), points the agent at the proxy via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` with the run id in the URL path.
+- `pitstop run -- claude`: registers a run (repo + branch auto-detected), points the agent at the proxy via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` with the run id in the URL path. It also sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` for the agent (unless you set it), because Claude Code turns its task list off on models newer than Opus 4.7 / Sonnet 4.6 / Haiku 4.5, and without a plan there is no forecast.
 - `pitstop runs`: recent runs with calls and cost.
 
-- Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 403. Reads the request history, keeps only tool names.
+- Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 403. Reads the request history, keeps only tool names. When you type a new message (for example after `pitstop resume`), the count starts again.
 
 - `pitstop checkpoint <run>`: commits the run's working tree (incl. untracked, minus .gitignored) to `pitstop/wip/<run>`. Your branch, index and files are untouched. Runs automatically on a loop stop or cap block.
 - `pitstop resume <run>`: reopens Claude Code on the same run (`claude --resume <session>` if the session id was seen, else `claude --continue`), so spend and caps carry on. Other agents: prints manual steps.
 
-- Progress + forecast: the proxy reads the agent's plan from the request history (Claude Code `TodoWrite`, or a `report_progress` tool call with `{done,total}`). Forecast = steps left x average cost per step x context-growth factor (1-2x); p90 = 2 x p50; "low" confidence until 3 steps are done. Each forecast is saved for later accuracy scoring.
+- Progress + forecast: the proxy reads the agent's plan from the request history (Claude Code `TaskCreate`/`TaskUpdate` or `TodoWrite`, or a `report_progress` tool call with `{done,total}`). Forecast = steps left x average cost per step x context-growth factor (1-2x); p90 = 2 x p50; "low" confidence until 3 steps are done. Each forecast is saved for later accuracy scoring.
 - `pitstop status [run]`: one line, usable as a Claude Code status line: `$3.20 / $5.00 · 3/8 steps · likely $5.33-$10.67 more · on track · medium confidence`. Says "WON'T FIT BUDGET" when spent >= 70% of budget and p50 > what is left. No plan seen means no forecast.
 
 - Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save) or the desktop popup (macOS osascript, Linux zenity). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 9m, under the SDK's 10 minute request timeout) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.

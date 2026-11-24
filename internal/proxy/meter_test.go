@@ -26,3 +26,30 @@ func TestOpenAIStreamCachedTokensBilledOnce(t *testing.T) {
 		t.Fatalf("cost %d", c)
 	}
 }
+
+func TestAnthropicCacheWriteSplitByLifetime(t *testing.T) {
+	m := &meter{provider: "anthropic", stream: true}
+	m.write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":3000," +
+		"\"cache_creation\":{\"ephemeral_5m_input_tokens\":1000,\"ephemeral_1h_input_tokens\":2000},\"output_tokens\":1}}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n"))
+	if u := m.usage(); u != (price.Usage{Input: 10, Output: 7, CacheWrite: 1000, CacheWrite1h: 2000}) {
+		t.Fatalf("usage %+v", u)
+	}
+}
+
+func TestCutStreamEstimatesOutput(t *testing.T) {
+	m := &meter{provider: "anthropic", stream: true}
+	m.write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":500,\"output_tokens\":1}}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"abcdefghijkl\"}}\n\n"))
+	u, est := m.cutUsage(9000)
+	if !est || u.Input != 500 || u.Output != 5 { // 12 chars / 3 + 1
+		t.Fatalf("%+v %v", u, est)
+	}
+	// OpenAI reports usage only at the end: input comes from the request size.
+	o := &meter{provider: "openai", stream: true}
+	o.write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"abc\"}}]}\n\n"))
+	u, est = o.cutUsage(9000)
+	if !est || u.Input != 3001 || u.Output != 2 {
+		t.Fatalf("%+v %v", u, est)
+	}
+}

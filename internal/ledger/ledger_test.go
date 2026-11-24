@@ -11,6 +11,7 @@ func TestAccuracy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer l.Close()
 	mk := func(id string, done, total int, forecastP90, laterCost int64, conf string) {
 		l.StartRun(Run{ID: id, Started: time.Now()})
 		l.Record(Call{RunID: id, CostMicro: 1_000_000, At: time.Now()}) // spent before forecast

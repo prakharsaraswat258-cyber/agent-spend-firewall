@@ -26,6 +26,7 @@ type block struct {
 	Input    json.RawMessage `json:"input"`
 	IsError  bool            `json:"is_error"`
 	Content  json.RawMessage `json:"content"`
+	Text     string          `json:"text"`
 	Function *struct {
 		Name string `json:"name"`
 		Args string `json:"arguments"`
@@ -63,6 +64,12 @@ func Detect(body []byte) Result {
 	var calls, errs []string // per-turn fingerprints, in order
 	var names []string
 	for _, m := range req.Messages {
+		if m.Role == "user" && humanTurn(m.Content) {
+			// A person spoke after the streak (e.g. on resume after a loop stop):
+			// start counting again, or a stopped run could never continue.
+			calls, errs, names = nil, nil, nil
+			continue
+		}
 		var bl []block
 		_ = json.Unmarshal(m.Content, &bl) // string content: no blocks
 		bl = append(bl, m.ToolCalls...)
@@ -96,6 +103,30 @@ func Detect(body []byte) Result {
 		r = Result{Count: n, Kind: "error", Tool: lastOr(names)}
 	}
 	return r
+}
+
+// humanTurn reports whether a user message carries text typed by a person, not only
+// tool results or the agent's injected <system-reminder> notes.
+func humanTurn(raw json.RawMessage) bool {
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return typed(str)
+	}
+	var bl []block
+	if json.Unmarshal(raw, &bl) != nil {
+		return false
+	}
+	for _, b := range bl {
+		if b.Type == "text" && typed(b.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+func typed(s string) bool {
+	s = strings.TrimSpace(s)
+	return s != "" && !strings.HasPrefix(s, "<system-reminder>")
 }
 
 func lastOr(s []string) string {

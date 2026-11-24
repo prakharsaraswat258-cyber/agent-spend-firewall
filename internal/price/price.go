@@ -21,6 +21,8 @@ type Entry struct {
 	Output     float64 `json:"output"`
 	CacheRead  float64 `json:"cache_read"`
 	CacheWrite float64 `json:"cache_write"`
+	// CacheWrite1h is the 1-hour cache write rate. 0 means Anthropic's documented 2x input.
+	CacheWrite1h float64 `json:"cache_write_1h"`
 	// Long, when set, replaces these prices for prompts over LongAbove tokens.
 	LongAbove int64  `json:"long_above"`
 	Long      *Entry `json:"long"`
@@ -32,8 +34,21 @@ type Table struct {
 }
 
 // Usage is billable token counts. Input excludes cached tokens.
+// CacheWrite is 5-minute cache writes, CacheWrite1h is 1-hour cache writes.
 type Usage struct {
-	Input, Output, CacheRead, CacheWrite int64
+	Input, Output, CacheRead, CacheWrite, CacheWrite1h int64
+}
+
+// write1hRate: the explicit rate, else Anthropic's documented 2x input for models
+// that have cache writes at all. Models without cache writes (OpenAI) get 0.
+func (e Entry) write1hRate() float64 {
+	if e.CacheWrite1h > 0 {
+		return e.CacheWrite1h
+	}
+	if e.CacheWrite > 0 {
+		return 2 * e.Input
+	}
+	return 0
 }
 
 func Load(b []byte) (*Table, error) {
@@ -71,11 +86,12 @@ func (t *Table) Lookup(model string) (Entry, error) {
 
 // Cost: tokens * ($/Mtok) is exactly micro-dollars. Rounded once per call.
 func (e Entry) Cost(u Usage) Micro {
-	if e.Long != nil && u.Input+u.CacheRead+u.CacheWrite > e.LongAbove {
+	if e.Long != nil && u.Input+u.CacheRead+u.CacheWrite+u.CacheWrite1h > e.LongAbove {
 		return e.Long.Cost(u)
 	}
 	f := float64(u.Input)*e.Input + float64(u.Output)*e.Output +
-		float64(u.CacheRead)*e.CacheRead + float64(u.CacheWrite)*e.CacheWrite
+		float64(u.CacheRead)*e.CacheRead + float64(u.CacheWrite)*e.CacheWrite +
+		float64(u.CacheWrite1h)*e.write1hRate()
 	return Micro(math.Round(f))
 }
 
@@ -84,6 +100,6 @@ func (e Entry) MaxCost(inputTokens, maxOutput int64) Micro {
 	if e.Long != nil && inputTokens > e.LongAbove {
 		return e.Long.MaxCost(inputTokens, maxOutput)
 	}
-	rate := math.Max(e.Input, math.Max(e.CacheRead, e.CacheWrite))
+	rate := max(e.Input, e.CacheRead, e.CacheWrite, e.write1hRate())
 	return Micro(math.Ceil(float64(inputTokens)*rate + float64(maxOutput)*e.Output))
 }

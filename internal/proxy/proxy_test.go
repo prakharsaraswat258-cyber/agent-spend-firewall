@@ -41,6 +41,7 @@ func setupP(t *testing.T, runCap int64) (*httptest.Server, *ledger.Ledger, *Prox
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { l.Close() }) // Windows cannot delete an open file
 	u, _ := url.Parse(up.URL)
 	p := &Proxy{Prices: price.Default(), Ledger: l, Guard: caps.New(caps.Limits{Run: runCap}, l),
 		Anthropic: u, OpenAI: u, DefaultRun: "r1"}
@@ -284,6 +285,7 @@ func TestUnmeteredPathsGoToTheKeysProvider(t *testing.T) {
 	au, _ := url.Parse(a.URL)
 	ou, _ := url.Parse(o.URL)
 	l, _ := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
+	t.Cleanup(func() { l.Close() })
 	px := httptest.NewServer(&Proxy{Prices: price.Default(), Ledger: l, Guard: caps.New(caps.Limits{}, l), Anthropic: au, OpenAI: ou})
 	t.Cleanup(px.Close)
 	get := func(h, v string) (string, int) {
@@ -316,5 +318,107 @@ func TestSessionIDOnlyFromMetadata(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 	if r, _ := l.GetRun("ss"); r.SessionID != real {
 		t.Fatalf("session %q, want %q", r.SessionID, real)
+	}
+}
+
+// Ctrl-C mid-stream: the provider still bills, so the ledger must too.
+func TestClientHangUpStillBilled(t *testing.T) {
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100000,\"output_tokens\":1}}}\n\n")
+		io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello world!\"}}\n\n")
+		w.(http.Flusher).Flush()
+		select { // never sends message_delta
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer close(release)
+	t.Cleanup(up.Close)
+	l, _ := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
+	t.Cleanup(func() { l.Close() })
+	u, _ := url.Parse(up.URL)
+	px := httptest.NewServer(&Proxy{Prices: price.Default(), Ledger: l, Guard: caps.New(caps.Limits{}, l), Anthropic: u, OpenAI: u, DefaultRun: "r"})
+	t.Cleanup(px.Close)
+	resp, err := http.Post(px.URL+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":8000,"stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	resp.Body.Read(buf)
+	resp.Body.Close() // user hits Ctrl-C
+	var cs []ledger.CallRow
+	for i := 0; i < 300 && len(cs) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		cs, _ = l.Calls("r", 10)
+	}
+	if len(cs) != 1 || cs[0].Input != 100000 || cs[0].Output < 2 || !cs[0].Estimated {
+		t.Fatalf("hang-up not billed: %+v", cs)
+	}
+}
+
+// A failed ledger write must stop later calls instead of letting them through unmetered.
+func TestLedgerFailureBlocksLaterCalls(t *testing.T) {
+	px, l, _ := setupP(t, 0)
+	if c, _ := post(px); c.StatusCode != 200 {
+		t.Fatal("first call")
+	}
+	time.Sleep(50 * time.Millisecond)
+	l.Close() // every write now fails
+	post(px)  // goes out (already admitted), its write fails
+	time.Sleep(50 * time.Millisecond)
+	resp, body := post(px)
+	if resp.StatusCode != 503 || !strings.Contains(body, "ledger could not be written") {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+}
+
+func TestSideEndpoints(t *testing.T) {
+	var hits []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.Method+" "+r.URL.Path)
+		io.WriteString(w, `{"input_tokens":12}`)
+	}))
+	t.Cleanup(up.Close)
+	l, _ := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
+	t.Cleanup(func() { l.Close() })
+	u, _ := url.Parse(up.URL)
+	px := httptest.NewServer(&Proxy{Prices: price.Default(), Ledger: l, Guard: caps.New(caps.Limits{Run: 1}, l), Anthropic: u, OpenAI: u, DefaultRun: "r"})
+	t.Cleanup(px.Close)
+	do := func(method, path, auth string) int {
+		req, _ := http.NewRequest(method, px.URL+path, strings.NewReader(`{"model":"claude-sonnet-4-5","messages":[]}`))
+		if strings.HasPrefix(auth, "Bearer") {
+			req.Header.Set("Authorization", auth)
+		} else {
+			req.Header.Set("x-api-key", auth)
+		}
+		resp, _ := http.DefaultClient.Do(req)
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+	// Free token counting passes even with a $0.000001 cap, and is not billed.
+	if c := do("POST", "/v1/messages/count_tokens", "k"); c != 200 {
+		t.Fatalf("count_tokens %d", c)
+	}
+	if c := do("GET", "/v1/messages/batches/b1", "k"); c != 200 {
+		t.Fatalf("batch read %d", c)
+	}
+	for _, p := range []string{"/v1/messages/batches", "/v1/complete"} {
+		if c := do("POST", p, "k"); c != 400 {
+			t.Fatalf("%s must be blocked, got %d", p, c)
+		}
+	}
+	for _, p := range []string{"/v1/embeddings", "/v1/images/generations", "/v1/completions"} {
+		if c := do("POST", p, "Bearer sk"); c != 400 {
+			t.Fatalf("%s must be blocked, got %d", p, c)
+		}
+	}
+	if len(hits) != 2 {
+		t.Fatalf("only the 2 free calls may reach the provider: %v", hits)
+	}
+	if s, _ := l.SpentRun("r"); s != 0 {
+		t.Fatalf("free calls billed %d", s)
 	}
 }

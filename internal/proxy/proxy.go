@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
@@ -37,6 +38,9 @@ type Proxy struct {
 	OpenAI     *url.URL
 	DefaultRun string
 	Decider    *decide.Decider // nil: no pause card, caps block with 403
+
+	mu     sync.Mutex
+	broken error // set when a ledger write failed: every metered call is blocked until restart
 }
 
 var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
@@ -167,22 +171,32 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var provider string
 	var target *url.URL
+	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/v1/messages"):
+	case r.Method == http.MethodPost && path == "/v1/messages":
 		provider, target = "anthropic", p.Anthropic
-	case strings.HasPrefix(r.URL.Path, "/v1/chat/completions"), strings.HasPrefix(r.URL.Path, "/v1/responses"):
+	case r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses"):
 		provider, target = "openai", p.OpenAI
 	default:
-		// Non-metered paths (model lists etc.) go to the provider the credentials belong to,
+		// Non-metered paths go to the provider the credentials belong to,
 		// so an Anthropic key never reaches OpenAI or the other way round.
+		prov, to := "", (*url.URL)(nil)
 		switch {
 		case r.Header.Get("X-Api-Key") != "" || r.Header.Get("Anthropic-Version") != "":
-			p.forward(w, r, p.Anthropic, nil)
+			prov, to = "anthropic", p.Anthropic
 		case strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "):
-			p.forward(w, r, p.OpenAI, nil)
+			prov, to = "openai", p.OpenAI
 		default:
 			http.NotFound(w, r)
+			return
 		}
+		if !free(r.Method, path) {
+			// Fail closed: a call Pitstop cannot price must not go out unmetered.
+			log.Printf("pitstop: blocked unmetered %s %s", r.Method, path)
+			fail(w, prov, 400, fmt.Sprintf("Pitstop cannot meter %s %s yet, so it is blocked. Metered: POST /v1/messages, /v1/chat/completions, /v1/responses.", r.Method, path))
+			return
+		}
+		p.forward(w, r, to, nil)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -202,6 +216,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.Model == "" {
 		fail(w, provider, 400, "request has no JSON model field")
+		return
+	}
+	if err := p.brokenErr(); err != nil {
+		fail(w, provider, 503, "Pitstop blocked this call: its ledger could not be written ("+err.Error()+"), so spend is not being tracked. Fix: check free disk space and permissions on the ledger file, then restart pitstop serve.")
 		return
 	}
 	entry, err := p.Prices.Lookup(req.Model)
@@ -253,18 +271,70 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	m := &meter{provider: provider, stream: req.Stream}
-	p.forward(w, r, target, &tap{body: body, m: m})
-	u := m.usage()
-	if u == (price.Usage{}) {
-		return // upstream error or no usage reported: nothing to bill
+	aborted := p.forwardCatch(w, r, target, &tap{body: body, m: m})
+	u, estimated := m.usage(), false
+	if aborted && m.billable {
+		// Client hung up or the upstream dropped mid-response: the provider still bills.
+		u, estimated = m.cutUsage(int64(len(body)))
 	}
-	if err := p.Ledger.Record(ledger.Call{
-		RunID: run, Provider: provider, Model: req.Model,
-		Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite,
-		CostMicro: entry.Cost(u), LatencyMS: time.Since(start).Milliseconds(), At: start,
-	}); err != nil {
-		log.Printf("pitstop: ledger write failed: %v", err)
+	if u != (price.Usage{}) { // zero: upstream error or no usage reported, nothing to bill
+		if err := p.Ledger.Record(ledger.Call{
+			RunID: run, Provider: provider, Model: req.Model,
+			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, CacheWrite1h: u.CacheWrite1h,
+			CostMicro: entry.Cost(u), LatencyMS: time.Since(start).Milliseconds(), At: start, Estimated: estimated,
+		}); err != nil {
+			// Fail closed: spend is no longer tracked, so no further call may go out.
+			p.setBroken(err)
+			log.Printf("pitstop: ledger write failed, blocking all calls: %v", err)
+		}
 	}
+	if aborted {
+		panic(http.ErrAbortHandler) // keep the connection aborted, as ReverseProxy intended
+	}
+}
+
+// forwardCatch forwards and reports whether the response was cut off mid-stream.
+// ReverseProxy signals that by panicking with http.ErrAbortHandler, which would
+// otherwise skip the ledger write.
+func (p *Proxy) forwardCatch(w http.ResponseWriter, r *http.Request, target *url.URL, t *tap) (aborted bool) {
+	defer func() {
+		if v := recover(); v != nil {
+			if v != http.ErrAbortHandler {
+				panic(v)
+			}
+			aborted = true
+		}
+	}()
+	p.forward(w, r, target, t)
+	return false
+}
+
+func (p *Proxy) setBroken(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.broken == nil {
+		p.broken = err
+	}
+}
+
+func (p *Proxy) brokenErr() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.broken
+}
+
+// free reports whether a non-metered request costs nothing: reads, deletes, token
+// counting and cancels. Any other POST (batches, embeddings, images, audio, legacy
+// completions) may cost money that Pitstop cannot price, so it is blocked.
+func free(method, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodDelete:
+		return true
+	case http.MethodPost:
+		return path == "/v1/messages/count_tokens" || path == "/v1/responses/input_tokens" ||
+			strings.HasSuffix(path, "/cancel")
+	}
+	return false
 }
 
 type tap struct {
@@ -287,6 +357,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL,
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if t != nil && resp.StatusCode == 200 {
+				t.m.billable = true
 				resp.Body = &teeBody{ReadCloser: resp.Body, m: t.m}
 			}
 			return nil

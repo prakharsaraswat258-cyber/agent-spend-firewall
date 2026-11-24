@@ -77,6 +77,11 @@ func launch(cfg Config, id, dir string, args []string) int {
 	c.Dir = dir
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	c.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+base, "OPENAI_BASE_URL="+base+"/v1")
+	// Claude Code turns its task list off on models newer than Opus 4.7 / Sonnet 4.6 / Haiku 4.5.
+	// Without it Pitstop sees no plan and cannot forecast. Child process only; the user's own value wins.
+	if _, set := os.LookupEnv("CLAUDE_CODE_ENABLE_TODO_TOOLS"); !set {
+		c.Env = append(c.Env, "CLAUDE_CODE_ENABLE_TODO_TOOLS=1")
+	}
 	code := 0
 	if err := c.Run(); err != nil {
 		code = 127
