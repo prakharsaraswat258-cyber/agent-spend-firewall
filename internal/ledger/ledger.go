@@ -25,7 +25,8 @@ func Open(path string) (*Ledger, error) {
 	}
 	db.SetMaxOpenConns(1) // sqlite: one writer
 	_, err = db.Exec(`
-CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT);
+CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT, dir TEXT, session_id TEXT);
+CREATE TABLE IF NOT EXISTS checkpoints(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, branch TEXT, commit_sha TEXT, reason TEXT);
 CREATE TABLE IF NOT EXISTS calls(
  id INTEGER PRIMARY KEY, run_id TEXT, provider TEXT, model TEXT,
  input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER,
@@ -67,15 +68,15 @@ func (l *Ledger) sum(q string, a any) (int64, error) {
 }
 
 type Run struct {
-	ID, Repo, Branch, Agent string
-	Started                 time.Time
-	CostMicro, Calls, Loops int64
+	ID, Repo, Branch, Agent, Dir, SessionID string
+	Started                                 time.Time
+	CostMicro, Calls, Loops                 int64
 }
 
 // StartRun registers a run with auto-detected context. Safe to call twice.
 func (l *Ledger) StartRun(r Run) error {
-	_, err := l.db.Exec(`INSERT OR IGNORE INTO runs(id,started,repo,branch,agent) VALUES(?,?,?,?,?)`,
-		r.ID, r.Started.Unix(), r.Repo, r.Branch, r.Agent)
+	_, err := l.db.Exec(`INSERT OR IGNORE INTO runs(id,started,repo,branch,agent,dir) VALUES(?,?,?,?,?,?)`,
+		r.ID, r.Started.Unix(), r.Repo, r.Branch, r.Agent, r.Dir)
 	return err
 }
 
@@ -111,4 +112,31 @@ func (l *Ledger) RecordLoop(run, kind, tool string, repeats int, action string) 
 	_, err = l.db.Exec(`INSERT INTO loop_alerts(run_id,at,kind,tool,repeats,action) VALUES(?,?,?,?,?,?)`,
 		run, time.Now().Unix(), kind, tool, repeats, action)
 	return err
+}
+
+// GetRun returns one run's context, or sql.ErrNoRows.
+func (l *Ledger) GetRun(id string) (Run, error) {
+	r := Run{ID: id}
+	var t int64
+	err := l.db.QueryRow(`SELECT COALESCE(repo,''),COALESCE(branch,''),COALESCE(agent,''),COALESCE(dir,''),COALESCE(session_id,''),started FROM runs WHERE id=?`, id).
+		Scan(&r.Repo, &r.Branch, &r.Agent, &r.Dir, &r.SessionID, &t)
+	r.Started = time.Unix(t, 0)
+	return r, err
+}
+
+func (l *Ledger) SetSession(run, sid string) error {
+	_, err := l.db.Exec(`UPDATE runs SET session_id=? WHERE id=? AND COALESCE(session_id,'')<>?`, sid, run, sid)
+	return err
+}
+
+func (l *Ledger) SaveCheckpoint(run, branch, commit, reason string) error {
+	_, err := l.db.Exec(`INSERT INTO checkpoints(run_id,at,branch,commit_sha,reason) VALUES(?,?,?,?,?)`,
+		run, time.Now().Unix(), branch, commit, reason)
+	return err
+}
+
+// LastCheckpoint returns branch and commit, or empty strings.
+func (l *Ledger) LastCheckpoint(run string) (branch, commit string) {
+	l.db.QueryRow(`SELECT branch,commit_sha FROM checkpoints WHERE run_id=? ORDER BY id DESC LIMIT 1`, run).Scan(&branch, &commit)
+	return
 }

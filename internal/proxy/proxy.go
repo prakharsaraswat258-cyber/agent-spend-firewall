@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/checkpoint"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/loop"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
@@ -30,6 +32,23 @@ type Proxy struct {
 	Anthropic  *url.URL
 	OpenAI     *url.URL
 	DefaultRun string
+}
+
+var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
+
+// save checkpoints the run's repo (best effort) and returns a line for the error message.
+func (p *Proxy) save(run, reason string) string {
+	r, err := p.Ledger.GetRun(run)
+	if err != nil || r.Dir == "" {
+		return ""
+	}
+	br, c, err := checkpoint.Make(r.Dir, run, "pitstop checkpoint: "+reason)
+	if err != nil {
+		log.Printf("pitstop: checkpoint failed: %v", err)
+		return ""
+	}
+	_ = p.Ledger.SaveCheckpoint(run, br, c, reason)
+	return fmt.Sprintf(" Work saved on branch %s. Resume: pitstop resume %s", br, run)
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +102,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if run == "" {
 		run = p.DefaultRun
 	}
+	if provider == "anthropic" && runID != "" {
+		if m := sessionRe.FindSubmatch(body); m != nil {
+			_ = p.Ledger.SetSession(run, string(m[1])) // lets resume reopen the same Claude Code session
+		}
+	}
 	if lr := loop.Detect(body); lr.Count >= loop.Warn {
 		action := "warned"
 		if lr.Count >= loop.Stop {
@@ -92,12 +116,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("pitstop: loop alert write failed: %v", err)
 		}
 		if action == "stopped" {
-			fail(w, provider, 429, fmt.Sprintf("Pitstop stopped a loop: %s %q repeated %d times. Change approach or start a new run.", lr.Kind, lr.Tool, lr.Count))
+			fail(w, provider, 429, fmt.Sprintf("Pitstop stopped a loop: %s %q repeated %d times.", lr.Kind, lr.Tool, lr.Count)+p.save(run, "loop"))
 			return
 		}
 	}
 	if err := p.Guard.Reserve(run, need); err != nil {
-		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error())
+		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error()+p.save(run, "cap"))
 		return
 	}
 	defer p.Guard.Release(run, need)

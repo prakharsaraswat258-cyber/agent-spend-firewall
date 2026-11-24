@@ -22,5 +22,10 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 - Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 429. Reads the request history, keeps only tool names.
 
+- `pitstop checkpoint <run>`: commits the run's working tree (incl. untracked, minus .gitignored) to `pitstop/wip/<run>`. Your branch, index and files are untouched. Runs automatically on a loop stop or cap block.
+- `pitstop resume <run>`: reopens Claude Code on the same run (`claude --resume <session>` if the session id was seen, else `claude --continue`), so spend and caps carry on. Other agents: prints manual steps.
+
+Unconfirmed: Claude Code session-id capture and `claude --resume` against a real session.
+
 Not yet: pause card, forecast, checkpoint, "no code change in N steps" signal, dashboard, per-run budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.

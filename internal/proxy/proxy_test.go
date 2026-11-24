@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -130,4 +132,36 @@ func TestLoopStoppedAtFive(t *testing.T) {
 		}
 	}
 	t.Fatalf("want 2 alerts on run lp: %+v", rs)
+}
+
+func TestLoopStopSavesWork(t *testing.T) {
+	px, l := setup(t, 0)
+	d := t.TempDir()
+	sh := func(a ...string) {
+		c := exec.Command("git", append([]string{"-C", d, "-c", "user.name=t", "-c", "user.email=t@t"}, a...)...)
+		if o, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, o)
+		}
+	}
+	sh("init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(d, "f"), []byte("1"), 0o644)
+	sh("add", "-A")
+	sh("commit", "-qm", "i")
+	os.WriteFile(filepath.Join(d, "f"), []byte("work in progress"), 0o644)
+	l.StartRun(ledger.Run{ID: "sv", Dir: d, Started: time.Now()})
+	var ms []string
+	for i := 0; i < 5; i++ {
+		ms = append(ms, `{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}`,
+			`{"role":"user","content":[{"type":"tool_result","content":"x"}]}`)
+	}
+	resp, _ := http.Post(px.URL+"/run/sv/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4","messages":[`+strings.Join(ms, ",")+`]}`))
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 429 || !strings.Contains(string(b), "pitstop resume sv") {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	out, _ := exec.Command("git", "-C", d, "show", "pitstop/wip/sv:f").Output()
+	if string(out) != "work in progress" {
+		t.Fatalf("wip branch content %q", out)
+	}
 }
