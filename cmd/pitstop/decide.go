@@ -16,16 +16,7 @@ import (
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 )
 
-func cardText(c decide.Card) string {
-	var b strings.Builder
-	if c.Reason == "cap" {
-		fmt.Fprintf(&b, "Budget reached on run %s: %s of %s used.\n", c.Run, usd(c.Spent), usd(c.Budget))
-	} else {
-		fmt.Fprintf(&b, "Run %s will not fit its budget.\n%d of %d steps done, %s of %s used.\nLikely %s to %s more to finish (%s confidence).\n",
-			c.Run, c.Done, c.Total, usd(c.Spent), usd(c.Budget), usd(c.P10), usd(c.P90), c.Confidence)
-	}
-	return b.String()
-}
+func cardText(c decide.Card) string { return c.Text() }
 
 func ctl(cfg Config, method, path string, body any) (*http.Response, error) {
 	var r *bytes.Reader

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -39,6 +40,8 @@ func main() {
 		os.Exit(statusCmd(cfg, os.Args[2:]))
 	case "hook":
 		os.Exit(hookCmd(cfg, os.Args[2:]))
+	case "notify":
+		os.Exit(notifyCmd(cfg, os.Args[2:]))
 	case "decide":
 		os.Exit(decideCmd(cfg))
 	case "accuracy":
@@ -46,7 +49,7 @@ func main() {
 	case "runs":
 		os.Exit(runsCmd(cfg))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide | accuracy")
+		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide | accuracy | notify ...")
 		os.Exit(2)
 	}
 }
@@ -92,8 +95,10 @@ func serve(cfg Config) {
 	}
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	dec := decide.New(*to)
-	dec.Notify = func(c decide.Card) { desktopNotify(cfg, c, *to) }
+	hub := setupNotify(context.Background(), cfg, *addr, l, dec, p, *to)
+	dec.Notify = hub.Card
 	dec.Log = func(c decide.Card, a decide.Answer, d time.Duration) {
+		hub.Resolved(c, a) // close the card on every channel
 		ans := "stop"
 		if a.Continue {
 			ans = "continue"

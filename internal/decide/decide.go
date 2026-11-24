@@ -11,16 +11,16 @@ import (
 
 // Card is what the human sees. Money in micro-dollars.
 type Card struct {
-	ID, Run    string
-	Reason     string // "forecast" or "cap"
-	Spent      int64
-	Budget     int64
+	ID, Run       string
+	Reason        string // "forecast" or "cap"
+	Spent         int64
+	Budget        int64
 	P10, P50, P90 int64 // still to spend; the range shown is P10-P90; zero when there is no plan
-	Offer      int64 // suggested budget raise
-	Confidence string
-	Done       int
-	Total      int
-	Asked      time.Time
+	Offer         int64 // suggested budget raise
+	Confidence    string
+	Done          int
+	Total         int
+	Asked         time.Time
 }
 
 type Answer struct {
