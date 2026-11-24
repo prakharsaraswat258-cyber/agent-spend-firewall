@@ -83,6 +83,12 @@ func agentName(cmd string) string {
 // launch runs cmd with the proxy env for run id, in dir (or here when empty).
 func launch(cfg Config, id, dir string, args []string) int {
 	base := "http://" + cfg.Addr + "/run/" + id
+	if agentName(args[0]) == "codex" {
+		if exe, err := os.Executable(); err == nil {
+			args = append(append([]string{args[0]}, codexArgs(base, exe)...), args[1:]...)
+			codexNotes()
+		}
+	}
 	if agentName(args[0]) == "claude" {
 		// Pause at a safe point (before a tool call) instead of holding an HTTP request.
 		if path, err := claudeHookSettings(); err == nil {

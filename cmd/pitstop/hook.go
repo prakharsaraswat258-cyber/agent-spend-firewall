@@ -34,7 +34,8 @@ func hookCmd(cfg Config, args []string) int {
 	if run == "" {
 		return 0
 	}
-	b, _ := json.Marshal(map[string]string{"run": run})
+	// The session id lets `pitstop resume` reopen the same conversation (Codex sends it only here).
+	b, _ := json.Marshal(map[string]string{"run": run, "session": in.SessionID})
 	req, _ := http.NewRequest("POST", "http://"+cfg.Addr+"/pitstop/gate", bytes.NewReader(b))
 	req.Header.Set("X-Pitstop", "1")
 	req.Header.Set("Content-Type", "application/json")

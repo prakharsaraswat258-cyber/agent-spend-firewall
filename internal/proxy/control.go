@@ -8,6 +8,7 @@ import (
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -43,11 +44,15 @@ func (p *Proxy) Control(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/gate"):
 		// Called by `pitstop hook pre-tool`; may wait for a human answer (up to the pause timeout).
 		var g struct {
-			Run string `json:"run"`
+			Run     string `json:"run"`
+			Session string `json:"session"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&g) != nil || g.Run == "" {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
+		}
+		if sessionID.MatchString(g.Session) {
+			_ = p.Ledger.SetSession(g.Run, g.Session)
 		}
 		msg := p.Gate(g.Run)
 		json.NewEncoder(w).Encode(map[string]any{"allow": msg == "", "message": msg})
@@ -132,3 +137,6 @@ func (p *Proxy) overview(w http.ResponseWriter) {
 	}
 	json.NewEncoder(w).Encode(map[string]any{"day": day, "month": month, "dayCap": p.Guard.L.Day, "monthCap": p.Guard.L.Month, "accHits": acc.Hits, "accScored": acc.Scored, "accMin": ledger.MinScored, "cards": cards, "runs": views})
 }
+
+// sessionID: agent session ids are UUIDs; anything else is ignored.
+var sessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

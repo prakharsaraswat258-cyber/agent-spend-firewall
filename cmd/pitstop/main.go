@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
@@ -66,6 +67,8 @@ func serve(cfg Config) {
 	runCap := fs.Float64("run-cap", cfg.BudgetUSD, "per-run cap, USD (0 = off)")
 	dayCap := fs.Float64("day-cap", 0, "per-day cap, USD (0 = off)")
 	monthCap := fs.Float64("month-cap", 0, "per-month cap, USD (0 = off)")
+	anthUp := fs.String("anthropic-upstream", "https://api.anthropic.com", "where /v1/messages goes (e.g. a company gateway)")
+	openUp := fs.String("openai-upstream", "https://api.openai.com", "where /v1/chat/completions and /v1/responses go")
 	to := fs.Duration("pause-timeout", 9*time.Minute, "no answer to a pause card in this time: stop and save (keep it under the SDK's 10 minute request timeout)")
 	fs.Parse(os.Args[2:])
 
@@ -99,9 +102,22 @@ func serve(cfg Config) {
 		log.Printf("pitstop: warning: price table %s is over 30 days old. Run: pitstop prices update", tb.Version)
 	}
 	m := func(usd float64) int64 { return int64(usd * 1e6) }
-	a, _ := url.Parse("https://api.anthropic.com")
-	o, _ := url.Parse("https://api.openai.com")
-	p := &proxy.Proxy{Prices: tb, Ledger: l, Anthropic: a, OpenAI: o,
+	a, err := upstream(*anthUp)
+	if err != nil {
+		log.Fatalf("--anthropic-upstream: %v", err)
+	}
+	o, err := upstream(*openUp)
+	if err != nil {
+		log.Fatalf("--openai-upstream: %v", err)
+	}
+	provs, err := proxy.LoadProviders(filepath.Join(dataDir(), "providers.json"))
+	if err != nil {
+		log.Fatal(err) // an invalid providers.json must not be half-used
+	}
+	for name, pr := range provs {
+		log.Printf("pitstop: provider %s at /p/%s/ -> %s", name, name, pr.BaseURL)
+	}
+	p := &proxy.Proxy{Prices: tb, Ledger: l, Anthropic: a, OpenAI: o, Providers: provs,
 		Guard: caps.New(caps.Limits{Run: m(*runCap), Day: m(*dayCap), Month: m(*monthCap)}, l)}
 	// Saved so `pitstop status` and other commands show the caps actually in force.
 	for k, v := range map[string]int64{"run_cap": m(*runCap), "day_cap": m(*dayCap), "month_cap": m(*monthCap)} {
@@ -134,4 +150,18 @@ func serve(cfg Config) {
 	log.Printf("pitstop on http://%s (prices %s, run cap $%.2f). Set ANTHROPIC_BASE_URL / OPENAI_BASE_URL to it.", *addr, tb.Version, *runCap)
 	http.Handle("/", p)
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+// upstream parses an upstream base URL. Keys pass through it, so it must be
+// https, except for a gateway on this machine.
+func upstream(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, fmt.Errorf("%q is not a full http(s) URL", raw)
+	}
+	if h := u.Hostname(); u.Scheme == "http" && h != "localhost" && h != "127.0.0.1" && h != "::1" {
+		return nil, fmt.Errorf("%q must use https; plain http is only allowed for localhost", raw)
+	}
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	return u, nil
 }

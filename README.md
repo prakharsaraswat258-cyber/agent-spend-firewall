@@ -37,6 +37,24 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save), the dashboard, a desktop popup (macOS osascript, Linux zenity), or Telegram (see Notifications). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 9m, under the SDK's 10 minute request timeout) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.
 - Control API (`/pitstop/pending`, `/pitstop/answer`): loopback Host only and an `X-Pitstop: 1` header required, so web pages can't answer cards.
 
+## What works with what
+
+| Agent or client | Meter + caps | Pause point | Resume |
+|---|---|---|---|
+| Claude Code with an API key: `pitstop run -- claude` | yes | before each tool call (hook) | `claude --resume <session>` |
+| Codex CLI with an API key: `pitstop run -- codex` | yes (Responses API) | before each tool call (hook; Codex asks you once to trust it in `/hooks`) | `codex resume <session>`, else `--last` |
+| Any tool with a base-URL setting: `pitstop run -- <cmd>` (sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`) | yes | the request is held | manual |
+| Your own code with an SDK: see `examples/custom-sdk`, name the run with header `X-Pitstop-Run` | yes | the request is held | manual |
+| OpenAI-compatible providers (OpenRouter, Gemini, Perplexity, a company gateway) at `/p/<name>/` | yes | as above | as above |
+
+Not for: Claude Code on a Pro/Max plan, Codex signed in with ChatGPT, or other flat-price plans. Those don't bill per call, so there is nothing to meter.
+
+**Codex:** `pitstop run -- codex` doesn't edit `~/.codex/config.toml`. It passes `-c` settings for that run only: a `pitstop` provider on the run's base URL (`wire_api = "responses"`, key from `OPENAI_API_KEY`), with a longer stream timeout so a pause doesn't time out, plus the PreToolUse pause hook. The hook also gives Pitstop the session id that `pitstop resume` uses.
+
+**Named providers:** put a `providers.json` in the Pitstop folder (`~/.pitstop/`). See `providers.example.json`. Each entry has a `base_url` (https; plain http only for localhost), an optional `kind` (`openai`, the default, or `anthropic` for an Anthropic-compatible gateway) and an optional `use_official_prices`. Point the client at `http://127.0.0.1:4546/p/<name>` (or `/run/<id>/p/<name>`) with that provider's key. Prices are looked up as `<name>/<model>` (add them with `pitstop prices add <name>/<model> ...`). The official price for the same model ID is only used when `use_official_prices` is true, because a reseller may charge more. An invalid `providers.json` stops `serve` from starting.
+
+**Gateways for the built-in routes:** `pitstop serve --anthropic-upstream https://gw.example.com/anthropic --openai-upstream https://gw.example.com/openai`. https only, except for a gateway on localhost.
+
 ## Steps, cost per step, and runs with no plan
 - The plan is kept with step names (cut to 120 characters; step names are allowed metadata, prompts and code are not) from Claude Code's `TaskCreate`/`TaskUpdate`, `TodoWrite`, or a `report_progress` call with `{"steps":[{"text","status"}]}` (or `{done,total}`).
 - Each call's cost is booked to the step in progress when it was made. The dashboard's run detail shows the plan as a checklist with the money spent on each step.
@@ -60,7 +78,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.
 
-Not yet: "no code change in N steps" signal, Telegram/phone channel, per-repo budgets, Codex hook check.
+Not yet: "no code change in N steps" signal, per-repo budgets. Codex with a real session is untested.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.
 
 - Dashboard: http://127.0.0.1:4546/dashboard (same port as the proxy). Today/month spend, waiting decision cards with Continue/Stop buttons, runs with step and money bars, click a run for its calls. Static page, no external requests; data comes from `/pitstop/*` with the guard header.

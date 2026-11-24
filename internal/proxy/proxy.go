@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,8 +37,9 @@ type Proxy struct {
 	Guard      *caps.Guard
 	Anthropic  *url.URL
 	OpenAI     *url.URL
-	DefaultRun string          // run for calls with no run id; "" = per Claude Code session, else untagged
-	Decider    *decide.Decider // nil: no pause card, caps block with 403
+	DefaultRun string               // run for calls with no run id; "" = per Claude Code session, else untagged
+	Providers  map[string]*Provider // named upstreams at /p/<name>/...
+	Decider    *decide.Decider      // nil: no pause card, caps block with 403
 
 	mu     sync.Mutex
 	broken error // set when a ledger write failed: every metered call is blocked until restart
@@ -301,10 +303,34 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id, path, _ := strings.Cut(rest, "/")
 		runID, r.URL.Path = id, "/"+path
 	}
-	var provider string
+	var provider string // API format: "anthropic" or "openai"
 	var target *url.URL
+	label, pname := "", "" // ledger label; named provider
+	var named *Provider
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/p/"); ok {
+		name, sub, _ := strings.Cut(rest, "/")
+		pr := p.Providers[name]
+		if pr == nil {
+			fail(w, "openai", 404, fmt.Sprintf("Pitstop has no provider named %q. Add it to providers.json in the Pitstop folder.", name))
+			return
+		}
+		named, pname, label = pr, name, name
+		r.URL.Path = "/" + sub
+		path := strings.TrimSuffix(r.URL.Path, "/")
+		if !pr.metered(r.Method, path) {
+			if !free(r.Method, path) {
+				log.Printf("pitstop: blocked unmetered %s /p/%s%s", r.Method, name, path)
+				fail(w, pr.Kind, 400, fmt.Sprintf("Pitstop cannot meter %s %s on %s yet, so it is blocked.", r.Method, path, name))
+				return
+			}
+			p.forward(w, r, pr.url, nil)
+			return
+		}
+		provider, target = pr.Kind, pr.url
+	}
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
+	case named != nil:
 	case r.Method == http.MethodPost && path == "/v1/messages":
 		provider, target = "anthropic", p.Anthropic
 	case r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses"):
@@ -354,7 +380,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, provider, 503, "Pitstop blocked this call: its ledger could not be written ("+err.Error()+"), so spend is not being tracked. Fix: check free disk space and permissions on the ledger file, then restart pitstop serve. Run pitstop doctor to check.")
 		return
 	}
-	entry, err := p.Prices.Lookup(req.Model)
+	entry, err := p.lookupFor(pname, named, req.Model)
 	if err != nil {
 		fail(w, provider, 400, err.Error()) // unknown price: block with a fix
 		return
@@ -412,7 +438,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer p.Guard.Release(run, need)
 
-	if provider == "openai" && req.Stream && strings.HasPrefix(r.URL.Path, "/v1/chat/completions") {
+	if provider == "openai" && req.Stream && strings.HasSuffix(path, "/chat/completions") {
 		body = withUsageStreaming(body)
 	}
 	start := time.Now()
@@ -425,7 +451,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if u != (price.Usage{}) { // zero: upstream error or no usage reported, nothing to bill
 		if err := p.Ledger.Record(ledger.Call{
-			RunID: run, Provider: provider, Model: req.Model,
+			RunID: run, Provider: cmp.Or(label, provider), Model: req.Model,
 			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, CacheWrite1h: u.CacheWrite1h,
 			CostMicro: entry.Cost(u), LatencyMS: time.Since(start).Milliseconds(), At: start, Estimated: estimated, Step: step,
 		}); err != nil {

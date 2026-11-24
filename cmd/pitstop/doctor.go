@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/proxy"
 )
 
 type check struct {
@@ -104,10 +106,23 @@ func doctorChecks(cfg Config, lookPath func(string) (string, error), version fun
 		add("ok", "claude code", strings.TrimSpace(p+" "+version(p)), "")
 		add("ok", "claude code", "connect a session with: pitstop run -- claude", "")
 	}
-	for _, a := range []string{"codex", "aider"} {
-		if _, err := lookPath(a); err == nil {
-			add("ok", a, "found; meter and cap it with: pitstop run -- "+a+" (no pause hook for it yet)", "")
+	if _, err := lookPath("codex"); err == nil {
+		add("ok", "codex", "found; run it metered with the pause hook: pitstop run -- codex (needs OPENAI_API_KEY)", "")
+	}
+	if _, err := lookPath("aider"); err == nil {
+		add("ok", "aider", "found; meter and cap it with: pitstop run -- aider (no pause hook: pauses hold the request)", "")
+	}
+
+	// Named providers (/p/<name>/).
+	if provs, err := proxy.LoadProviders(filepath.Join(dataDir(), "providers.json")); err != nil {
+		add("FAIL", "providers", err.Error(), "fix providers.json; pitstop serve will not start with it")
+	} else if len(provs) > 0 {
+		names := make([]string, 0, len(provs))
+		for n := range provs {
+			names = append(names, n)
 		}
+		sort.Strings(names)
+		add("ok", "providers", "/p/<name>/ for "+strings.Join(names, ", "), "")
 	}
 
 	// Pause hook (written by pitstop run).

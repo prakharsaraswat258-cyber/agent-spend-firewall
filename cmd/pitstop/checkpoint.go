@@ -65,6 +65,10 @@ func resumeCmd(cfg Config, args []string) int {
 		cmd = []string{"claude", "--resume", r.SessionID}
 	case r.Agent == "claude":
 		cmd = []string{"claude", "--continue"} // session id not seen: reopen the latest session in this folder
+	case r.Agent == "codex" && r.SessionID != "":
+		cmd = []string{"codex", "resume", r.SessionID}
+	case r.Agent == "codex":
+		cmd = []string{"codex", "resume", "--last"} // most recent session in this folder
 	default:
 		fmt.Fprintf(os.Stderr, "no automatic resume for %q. Restart it with: pitstop run -- %s  (in %s)\n", r.Agent, r.Agent, r.Dir)
 		return 1

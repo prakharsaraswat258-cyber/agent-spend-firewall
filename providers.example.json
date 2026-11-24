@@ -1,0 +1,8 @@
+{
+  "providers": {
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1"},
+    "gemini":     {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai"},
+    "perplexity": {"base_url": "https://api.perplexity.ai"},
+    "my-gateway": {"base_url": "https://llm-gateway.example.com", "kind": "anthropic", "use_official_prices": true}
+  }
+}
