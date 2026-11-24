@@ -6,20 +6,15 @@
   const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
   const k = (v) => (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(1) + 'k';
 
-  /* ---------- smooth scrolling (Lenis drives the native scroll, so scroll handlers still work) ---------- */
-  let lenis = null;
-  if (!reduce && window.Lenis) {
-    lenis = new Lenis({ duration: 1.15, easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), smoothWheel: true });
-    const raf = (time) => { lenis.raf(time); requestAnimationFrame(raf); };
-    requestAnimationFrame(raf);
-  }
+  /* ---------- smooth scrolling ----------
+     Native scrolling, with CSS smooth anchors. The chart eases toward the scroll position each frame
+     (below), which gives the smooth zoom without hijacking the wheel. */
   document.querySelectorAll('a[href^="#"]').forEach((a) => a.addEventListener('click', (e) => {
     const id = a.getAttribute('href');
     const target = id === '#top' ? document.body : document.querySelector(id);
     if (!target) return;
     e.preventDefault();
-    if (lenis) lenis.scrollTo(target, { offset: 0, duration: 1.4 });
-    else target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' });
+    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' });
   }));
 
   /* ---------- the story: 200 days of AI gains, a runaway agent, and the Pitstop line ---------- */
@@ -142,18 +137,25 @@
     const ph = tPs > 0.15 ? 2 : tDn > 0.1 ? 1 : 0;
     if (ph !== phase) { phase = ph; $('cap').textContent = caps[ph]; }
   }
+  // Ease the chart toward the scroll position so wheel steps become one smooth zoom.
+  let shown = 0, goal = 0;
+  const progress = () => { const r = wrap.getBoundingClientRect(); return clamp(-r.top / (r.height - innerHeight)); };
+  function frame() {
+    const d = goal - shown;
+    shown = Math.abs(d) < 0.0005 ? goal : shown + d * 0.14;
+    render(shown);
+    ticking = shown !== goal;
+    if (ticking) requestAnimationFrame(frame);
+  }
   function onScroll() {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => {
-      ticking = false;
-      const r = wrap.getBoundingClientRect();
-      render(reduce ? 1 : clamp(-r.top / (r.height - innerHeight)));
-    });
+    goal = reduce ? 1 : progress();
+    if (reduce) { shown = goal; render(goal); return; }
+    if (!ticking) { ticking = true; requestAnimationFrame(frame); }
   }
   addEventListener('scroll', onScroll, { passive: true });
   addEventListener('resize', onScroll);
-  onScroll();
+  shown = goal = reduce ? 1 : progress(); // start where the page is, no sweep on reload
+  render(shown);
 
   /* ---------- decision card ---------- */
   $('c-go').addEventListener('click', () => { $('c-note').textContent = 'Budget raised to $18.50. The agent resumes in seconds.'; });
@@ -191,17 +193,27 @@
   }
   typeAll();
 
-  /* ---------- entrances ---------- */
-  const io = new IntersectionObserver((es) => {
-    for (const e of es) {
-      if (!e.isIntersecting) continue;
-      const sibs = [...e.target.parentElement.querySelectorAll(':scope > .rise')];
-      e.target.style.transitionDelay = Math.max(0, sibs.indexOf(e.target)) * 75 + 'ms';
-      e.target.classList.add('in');
-      io.unobserve(e.target);
-    }
-  }, { threshold: 0.12 });
-  document.querySelectorAll('.rise').forEach((n) => io.observe(n));
+  /* ---------- entrances ----------
+     Reveal every part that is on screen or already scrolled past. Checked on load and on every
+     scroll frame, so a fast jump, a nav link or a restored scroll position never leaves content hidden. */
+  let pending = [...document.querySelectorAll('.rise')];
+  let revealQueued = false;
+  function reveal() {
+    revealQueued = false;
+    const line = innerHeight * 0.94;
+    const now = pending.filter((n) => n.getBoundingClientRect().top < line);
+    if (!now.length) return;
+    pending = pending.filter((n) => !now.includes(n));
+    now.forEach((n, i) => {
+      n.style.transitionDelay = Math.min(i, 6) * 70 + 'ms'; // stagger within one batch, capped
+      n.classList.add('in');
+    });
+  }
+  const queueReveal = () => { if (!revealQueued && pending.length) { revealQueued = true; requestAnimationFrame(reveal); } };
+  addEventListener('scroll', queueReveal, { passive: true });
+  addEventListener('resize', queueReveal);
+  addEventListener('load', queueReveal);
+  reveal();
 
   /* ---------- setup dialog ---------- */
   let agent = 'claude';

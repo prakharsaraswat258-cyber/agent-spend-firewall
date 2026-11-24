@@ -213,8 +213,8 @@ details p { padding: 0 24px 24px; max-width: 52ch; font-size: 17px; }
   .stage { position: relative; inset: auto; left: calc(-1 * var(--m)); width: 100vw; height: 520px; margin-top: 48px; clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 72px, 72px 72px, 72px 0); }
   .term { position: absolute; left: calc(var(--m) + 16px); top: auto; bottom: 0; width: calc(100vw - 32px); font-size: 14px; }
   .ticker { width: 100%; justify-content: space-between; }
-  .card { top: 2%; right: 50%; transform: translate(50%, 24px) scale(.97); }
-  .card.show { transform: translate(50%, 0); }
+  .card { top: 2%; left: 50%; transform: translate(-50%, 24px) scale(.97); }
+  .card.show { transform: translate(-50%, 0); }
   .strip { grid-template-columns: 1fr; }
   .field { min-height: 64svh; }
   .board { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 28vw; gap: 6px; }
@@ -266,8 +266,6 @@ details p { padding: 0 24px 24px; max-width: 52ch; font-size: 17px; }
 .quote .chg.pos { color: #22ab94; }
 .tv-bar .ticker b.up { color: #22ab94; } .tv-bar .ticker b.bad { color: #f23645; } .tv-bar .ticker b.hold { color: #f0a030; }
 
-/* smooth scrolling: Lenis when it loads, native smooth anchors otherwise */
+/* smooth scrolling: native, so the page never fights the scrollbar, keyboard or touch */
 html { scroll-behavior: smooth; }
-html.lenis, html.lenis body { height: auto; }
-.lenis.lenis-smooth { scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
