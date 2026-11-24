@@ -15,7 +15,7 @@ func TestStatusUsesTheCapsServeRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	cfg := Config{BudgetUSD: 5}
+	cfg := Config{Budget: 5_000_000}
 	if b := runBudget(cfg, l, "r"); b != 5_000_000 {
 		t.Fatalf("config fallback %d", b)
 	}
@@ -42,4 +42,27 @@ func TestFitLabel(t *testing.T) {
 			t.Errorf("spent %d budget %d: %q want %q", c.spent, c.budget, got, c.want)
 		}
 	}
+}
+
+func TestLocalAddrOnly(t *testing.T) {
+	for _, ok := range []string{"127.0.0.1:4546", "localhost:4546", "[::1]:4546"} {
+		if localAddr(ok) != nil {
+			t.Errorf("%s refused", ok)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0:4546", ":4546", "192.168.1.5:4546", "example.com:4546", "4546"} {
+		if localAddr(bad) == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestCommandsWorkBeforeFirstServe(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{DB: filepath.Join(home, "not-yet", ".pitstop", "ledger.db")}
+	l, err := openLedger(cfg)
+	if err != nil {
+		t.Fatalf("fresh install: %v", err)
+	}
+	l.Close()
 }

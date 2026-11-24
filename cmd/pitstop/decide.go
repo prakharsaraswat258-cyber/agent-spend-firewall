@@ -9,11 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 )
 
 func cardText(c decide.Card) string { return c.Text() }
@@ -66,12 +66,12 @@ func decideCmd(cfg Config) int {
 			case line == "s" || line == "stop":
 				cont, add = false, 0
 			case line != "":
-				v, err := strconv.ParseFloat(strings.TrimPrefix(line, "$"), 64)
+				v, err := money.ParseUSD(line)
 				if err != nil || v <= 0 {
-					fmt.Println("not a number: skipping, card stays open")
+					fmt.Println("not an amount in dollars: skipping, card stays open")
 					continue
 				}
-				add = int64(v * 1e6)
+				add = v
 			}
 			if err := answer(cfg, c.ID, cont, add, "cli"); err != nil {
 				fmt.Fprintln(os.Stderr, err)

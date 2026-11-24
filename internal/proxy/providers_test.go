@@ -53,7 +53,7 @@ func TestNamedProviderMeteredAndPriced(t *testing.T) {
 	u, _ := url.Parse(up.URL + "/api/v1")
 	l, _ := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
 	t.Cleanup(func() { l.Close() })
-	prices := price.Default().WithCustom(map[string]price.Entry{"or/vendor/model-x": {Input: 1, Output: 2}})
+	prices := price.Default().WithCustom(map[string]price.Entry{"or/vendor/model-x": {Input: price.R("1"), Output: price.R("2")}})
 	p := &Proxy{Prices: prices, Ledger: l, Guard: caps.New(caps.Limits{}, l), DefaultRun: "np",
 		Providers: map[string]*Provider{
 			"or":  {Kind: "openai", url: u},

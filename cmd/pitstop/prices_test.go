@@ -50,7 +50,9 @@ func TestPricesUpdate(t *testing.T) {
 	}
 
 	// Newer with a new model: saved and used.
-	nw := served(t, "2099-01-01", func(m map[string]price.Entry) { m["claude-new-9"] = price.Entry{Input: 3, Output: 15} })
+	nw := served(t, "2099-01-01", func(m map[string]price.Entry) {
+		m["claude-new-9"] = price.Entry{Input: price.R("3"), Output: price.R("15")}
+	})
 	out.Reset()
 	if err := updatePrices(ctx, Config{PricesURL: nw.URL}, false, &out); err != nil {
 		t.Fatal(err)
@@ -73,7 +75,9 @@ func TestPricesUpdate(t *testing.T) {
 	}
 
 	// Automatic update refuses a big price cut; a person can accept it by hand.
-	cut := served(t, "2100-01-01", func(m map[string]price.Entry) { m["claude-opus-5-5"] = price.Entry{Input: 0.01, Output: 0.01} })
+	cut := served(t, "2100-01-01", func(m map[string]price.Entry) {
+		m["claude-opus-5-5"] = price.Entry{Input: price.R("0.01"), Output: price.R("0.01")}
+	})
 	if err := updatePrices(ctx, Config{PricesURL: cut.URL}, true, &out); err == nil || !strings.Contains(err.Error(), "drop by half") {
 		t.Fatalf("auto update applied a big drop: %v", err)
 	}
@@ -95,7 +99,7 @@ func TestPricesAddAndCorruptFiles(t *testing.T) {
 	}
 	tb, source, warn := loadPrices()
 	e, err := tb.Lookup("my-model")
-	if err != nil || e.Input != 1.5 || e.Output != 6 || !strings.Contains(source, "1 custom") || len(warn) != 0 {
+	if err != nil || e.Input != price.R("1.5") || e.Output != price.R("6") || !strings.Contains(source, "1 custom") || len(warn) != 0 {
 		t.Fatalf("%+v %v %s %v", e, err, source, warn)
 	}
 	// A corrupt downloaded file is ignored with a warning; the built-in table stays.

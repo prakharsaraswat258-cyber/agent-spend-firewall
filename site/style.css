@@ -246,6 +246,7 @@ details p { padding: 0 24px 24px; max-width: 52ch; font-size: 17px; }
 .sym .logo { width: 52px; height: 52px; flex: none; background: var(--accent); clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 45%, 45% 45%, 45% 0); }
 .sym h2 { font-size: clamp(26px, 3vw, 44px); }
 .sym .ex { display: block; margin-top: 6px; font-size: 14px; color: #a8a8a8; }
+.sym .ex.illus { margin-top: 2px; font-size: 13px; color: #d9d9d9; font-style: italic; }
 .quote { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .quote b { font: 700 clamp(36px, 4.4vw, 64px)/1 var(--display); letter-spacing: -0.03em; }
 .quote .cur { font-size: 15px; color: #a8a8a8; }

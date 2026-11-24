@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/checkpoint"
-	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 )
 
 // checkpointCmd: pitstop checkpoint <run>. Saves the repo state to a WIP branch.
@@ -14,7 +13,7 @@ func checkpointCmd(cfg Config, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: pitstop checkpoint <run>")
 		return 2
 	}
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -41,7 +40,7 @@ func resumeCmd(cfg Config, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: pitstop resume <run>")
 		return 2
 	}
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -223,7 +222,7 @@ func pricesShow(args []string) int {
 	sort.Strings(names)
 	for _, n := range names {
 		e := t.Models[n]
-		fmt.Printf("  %-20s $%g in  $%g out\n", n, e.Input, e.Output)
+		fmt.Printf("  %-20s $%s in  $%s out\n", n, e.Input, e.Output)
 	}
 	return 0
 }
@@ -244,21 +243,21 @@ func pricesAdd(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	num := func(name, s string) (float64, error) {
+	num := func(name, s string) (price.Rate, error) {
 		if s == "" {
-			return 0, nil
+			return price.Rate{}, nil
 		}
-		v, err := strconv.ParseFloat(strings.TrimPrefix(s, "$"), 64)
-		if err != nil || v < 0 {
-			return 0, fmt.Errorf("--%s %q is not a price", name, s)
+		r, err := price.ParseRate(s)
+		if err != nil {
+			return price.Rate{}, fmt.Errorf("--%s %q is not a price: %v", name, s, err)
 		}
-		return v, nil
+		return r, nil
 	}
 	var e price.Entry
 	var err error
 	for _, f := range []struct {
 		name, s string
-		dst     *float64
+		dst     *price.Rate
 	}{{"input", in, &e.Input}, {"output", out, &e.Output}, {"cache-read", cr, &e.CacheRead}, {"cache-write", cw, &e.CacheWrite}, {"cache-write-1h", cw1h, &e.CacheWrite1h}} {
 		if *f.dst, err = num(f.name, f.s); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -287,6 +286,6 @@ func pricesAdd(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("saved %s: $%g in / $%g out per million tokens (in %s). Restart pitstop serve to use it.\n", model, e.Input, e.Output, customPricesPath())
+	fmt.Printf("saved %s: $%s in / $%s out per million tokens (in %s). Restart pitstop serve to use it.\n", model, e.Input, e.Output, customPricesPath())
 	return 0
 }

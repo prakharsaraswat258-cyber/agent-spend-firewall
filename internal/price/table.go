@@ -30,10 +30,10 @@ func (t *Table) Validate() error {
 }
 
 func (e Entry) validate() error {
-	if e.Input <= 0 || e.Output <= 0 {
+	if e.Input.m <= 0 || e.Output.m <= 0 {
 		return errors.New("input and output prices must be above 0")
 	}
-	if e.CacheRead < 0 || e.CacheWrite < 0 || e.CacheWrite1h < 0 || e.LongAbove < 0 {
+	if e.CacheRead.m < 0 || e.CacheWrite.m < 0 || e.CacheWrite1h.m < 0 || e.LongAbove < 0 {
 		return errors.New("prices cannot be negative")
 	}
 	if e.Long != nil {
@@ -121,22 +121,22 @@ func sameEntry(a, b Entry) bool {
 	return a.Long == nil || sameEntry(*a.Long, *b.Long)
 }
 
-func dropPct(old, new float64) int {
-	if old <= 0 || new >= old {
+func dropPct(old, new Rate) int {
+	if old.m <= 0 || new.m >= old.m {
 		return 0
 	}
-	return int((old - new) / old * 100)
+	return int((old.m - new.m) * 100 / old.m)
 }
 
 // String is one line per change, for `pitstop prices update`.
 func (c Change) String() string {
 	switch {
 	case c.Old == nil:
-		return fmt.Sprintf("+ %s: $%g in / $%g out", c.Model, c.New.Input, c.New.Output)
+		return fmt.Sprintf("+ %s: $%s in / $%s out", c.Model, c.New.Input, c.New.Output)
 	case c.New == nil:
 		return fmt.Sprintf("- %s (removed: calls to it will be blocked until you add a price)", c.Model)
 	default:
-		s := fmt.Sprintf("~ %s: $%g/$%g -> $%g/$%g (in/out per MTok)", c.Model, c.Old.Input, c.Old.Output, c.New.Input, c.New.Output)
+		s := fmt.Sprintf("~ %s: $%s/$%s -> $%s/$%s (in/out per MTok)", c.Model, c.Old.Input, c.Old.Output, c.New.Input, c.New.Output)
 		if c.BigDropPct >= 50 {
 			s += fmt.Sprintf("  [drop %d%%]", c.BigDropPct)
 		}

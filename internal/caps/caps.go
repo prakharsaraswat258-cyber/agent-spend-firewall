@@ -4,6 +4,8 @@ package caps
 
 import (
 	"fmt"
+
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 	"strings"
 	"sync"
 	"time"
@@ -40,11 +42,9 @@ type Denied struct {
 }
 
 func (d *Denied) Error() string {
-	return fmt.Sprintf("%s cap $%.4f would be exceeded: used+reserved $%.4f, call may cost up to $%.4f",
-		d.Scope, usd(d.Cap), usd(d.Used), usd(d.Need))
+	return fmt.Sprintf("%s cap %s would be exceeded: used+reserved %s, call may cost up to %s",
+		d.Scope, money.Exact(d.Cap), money.Exact(d.Used), money.Exact(d.Need))
 }
-
-func usd(m int64) float64 { return float64(m) / 1e6 }
 
 // Reserve holds `need` for run. Caller must Release with the same amount.
 func (g *Guard) Reserve(run string, need int64) error {

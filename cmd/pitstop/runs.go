@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 )
 
 func gitOut(dir string, args ...string) string {
@@ -58,7 +59,7 @@ func runCmd(cfg Config, args []string) int {
 		return 1
 	}
 	resp.Body.Close()
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -121,7 +122,7 @@ func launch(cfg Config, id, dir string, args []string) int {
 
 // summary closes the run and prints total cost, whether the forecast held, and loop alerts.
 func summary(cfg Config, id string) {
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		return
 	}
@@ -154,7 +155,7 @@ func summary(cfg Config, id string) {
 }
 
 func accuracyCmd(cfg Config) int {
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -177,7 +178,7 @@ func accuracyCmd(cfg Config) int {
 }
 
 func runsCmd(cfg Config) int {
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -190,7 +191,7 @@ func runsCmd(cfg Config) int {
 	}
 	fmt.Printf("%-20s %-8s %-18s %-16s %5s %5s %9s\n", "RUN", "AGENT", "REPO", "BRANCH", "CALLS", "LOOPS", "COST")
 	for _, r := range rs {
-		fmt.Printf("%-20s %-8s %-18s %-16s %5d %5d $%8.4f\n", r.ID, r.Agent, r.Repo, r.Branch, r.Calls, r.Loops, float64(r.CostMicro)/1e6)
+		fmt.Printf("%-20s %-8s %-18s %-16s %5d %5d %9s\n", r.ID, r.Agent, r.Repo, r.Branch, r.Calls, r.Loops, money.Exact(r.CostMicro))
 	}
 	return 0
 }

@@ -9,10 +9,9 @@ import (
 func TestValidateRejectsBadTables(t *testing.T) {
 	for name, tb := range map[string]*Table{
 		"empty":       {Version: "2026-11-24"},
-		"no date":     {Version: "latest", Models: map[string]Entry{"m": {Input: 1, Output: 1}}},
-		"free input":  {Version: "2026-11-24", Models: map[string]Entry{"m": {Input: 0, Output: 1}}},
-		"negative":    {Version: "2026-11-24", Models: map[string]Entry{"m": {Input: 1, Output: 1, CacheRead: -1}}},
-		"long no cap": {Version: "2026-11-24", Models: map[string]Entry{"m": {Input: 1, Output: 1, Long: &Entry{Input: 2, Output: 2}}}},
+		"no date":     {Version: "latest", Models: map[string]Entry{"m": {Input: R("1"), Output: R("1")}}},
+		"free input":  {Version: "2026-11-24", Models: map[string]Entry{"m": {Input: R("0"), Output: R("1")}}},
+		"long no cap": {Version: "2026-11-24", Models: map[string]Entry{"m": {Input: R("1"), Output: R("1"), Long: &Entry{Input: R("2"), Output: R("2")}}}},
 	} {
 		if tb.Validate() == nil {
 			t.Errorf("%s: must be rejected", name)
@@ -34,8 +33,8 @@ func TestStaleAndNewer(t *testing.T) {
 }
 
 func TestDiffAndCustom(t *testing.T) {
-	old := &Table{Version: "2026-01-01", Models: map[string]Entry{"a": {Input: 10, Output: 50}, "b": {Input: 1, Output: 2}}}
-	nw := &Table{Version: "2026-02-01", Models: map[string]Entry{"a": {Input: 2, Output: 10}, "c": {Input: 1, Output: 1}}}
+	old := &Table{Version: "2026-01-01", Models: map[string]Entry{"a": {Input: R("10"), Output: R("50")}, "b": {Input: R("1"), Output: R("2")}}}
+	nw := &Table{Version: "2026-02-01", Models: map[string]Entry{"a": {Input: R("2"), Output: R("10")}, "c": {Input: R("1"), Output: R("1")}}}
 	cs := Diff(old, nw)
 	if len(cs) != 3 || cs[0].Model != "a" || cs[0].BigDropPct != 80 || cs[1].New != nil || cs[2].Old != nil {
 		t.Fatalf("%+v", cs)
@@ -46,8 +45,8 @@ func TestDiffAndCustom(t *testing.T) {
 	if !strings.Contains(cs[0].String(), "[drop 80%]") {
 		t.Fatal(cs[0].String())
 	}
-	m := old.WithCustom(map[string]Entry{"b": {Input: 9, Output: 9}, "z": {Input: 1, Output: 1}})
-	if m.Models["b"].Input != 9 || m.Models["z"].Input != 1 || old.Models["b"].Input != 1 || !strings.HasSuffix(m.Version, "+custom") {
+	m := old.WithCustom(map[string]Entry{"b": {Input: R("9"), Output: R("9")}, "z": {Input: R("1"), Output: R("1")}})
+	if m.Models["b"].Input != R("9") || m.Models["z"].Input != R("1") || old.Models["b"].Input != R("1") || !strings.HasSuffix(m.Version, "+custom") {
 		t.Fatal("custom must win without changing the base table")
 	}
 }

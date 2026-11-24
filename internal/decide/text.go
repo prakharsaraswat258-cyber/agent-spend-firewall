@@ -3,10 +3,12 @@ package decide
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 )
 
 // USD formats micro-dollars for display only. Money is never computed from this.
-func USD(m int64) string { return fmt.Sprintf("$%.2f", float64(m)/1e6) }
+func USD(m int64) string { return money.Format(m) }
 
 // Text is the card as plain text: the same words in the terminal, the desktop
 // notification and Telegram. Numbers and step counts only; never prompts or code.

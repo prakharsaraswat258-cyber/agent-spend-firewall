@@ -88,7 +88,7 @@ func notifyCmd(cfg Config, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

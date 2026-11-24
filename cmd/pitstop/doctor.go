@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,9 +31,8 @@ func doctorChecks(cfg Config, lookPath func(string) (string, error), version fun
 	add := func(status, name, detail, fix string) { cs = append(cs, check{status, name, detail, fix}) }
 
 	// Address must stay on this machine.
-	host, _, err := net.SplitHostPort(cfg.Addr)
-	if ip := net.ParseIP(host); err != nil || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
-		add("FAIL", "address", cfg.Addr+" is not a loopback address", `set "addr" in `+cfgPath()+` to 127.0.0.1:4546`)
+	if err := localAddr(cfg.Addr); err != nil {
+		add("FAIL", "address", err.Error(), `set "addr" in `+cfgPath()+` to 127.0.0.1:4546`)
 	}
 
 	// Ledger.

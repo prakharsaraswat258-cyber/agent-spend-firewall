@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"math"
 	"regexp"
 	"strings"
 )
@@ -16,13 +15,15 @@ var embedded []byte
 // Micro is USD * 1e6. Integer so sums never drift.
 type Micro = int64
 
+// Entry is one model's prices, in dollars per million tokens in JSON and exact
+// integer micro-dollars per million tokens in memory.
 type Entry struct {
-	Input      float64 `json:"input"`
-	Output     float64 `json:"output"`
-	CacheRead  float64 `json:"cache_read"`
-	CacheWrite float64 `json:"cache_write"`
-	// CacheWrite1h is the 1-hour cache write rate. 0 means Anthropic's documented 2x input.
-	CacheWrite1h float64 `json:"cache_write_1h"`
+	Input      Rate `json:"input"`
+	Output     Rate `json:"output"`
+	CacheRead  Rate `json:"cache_read,omitzero"`
+	CacheWrite Rate `json:"cache_write,omitzero"`
+	// CacheWrite1h is the 1-hour cache write rate. Zero means Anthropic's documented 2x input.
+	CacheWrite1h Rate `json:"cache_write_1h,omitzero"`
 	// Long, when set, replaces these prices for prompts over LongAbove tokens.
 	LongAbove int64  `json:"long_above"`
 	Long      *Entry `json:"long"`
@@ -41,14 +42,14 @@ type Usage struct {
 
 // write1hRate: the explicit rate, else Anthropic's documented 2x input for models
 // that have cache writes at all. Models without cache writes (OpenAI) get 0.
-func (e Entry) write1hRate() float64 {
-	if e.CacheWrite1h > 0 {
+func (e Entry) write1hRate() Rate {
+	if !e.CacheWrite1h.IsZero() {
 		return e.CacheWrite1h
 	}
-	if e.CacheWrite > 0 {
-		return 2 * e.Input
+	if !e.CacheWrite.IsZero() {
+		return Rate{2 * e.Input.m}
 	}
-	return 0
+	return Rate{}
 }
 
 // Load parses and validates a price table.
@@ -88,21 +89,23 @@ func (t *Table) Lookup(model string) (Entry, error) {
 	return Entry{}, fmt.Errorf("Pitstop has no price for model %q (price table %s), so the call is blocked. Fix: pitstop prices update, or add it yourself: pitstop prices add %s --input <USD per MTok> --output <USD per MTok>", model, t.Version, model)
 }
 
-// Cost: tokens * ($/Mtok) is exactly micro-dollars. Rounded once per call.
+// Cost in micro-dollars, all integer: tokens x (micro-dollars per MTok) summed,
+// then divided by one million once per call, rounding half up.
 func (e Entry) Cost(u Usage) Micro {
 	if e.Long != nil && u.Input+u.CacheRead+u.CacheWrite+u.CacheWrite1h > e.LongAbove {
 		return e.Long.Cost(u)
 	}
-	f := float64(u.Input)*e.Input + float64(u.Output)*e.Output +
-		float64(u.CacheRead)*e.readRate() + float64(u.CacheWrite)*e.CacheWrite +
-		float64(u.CacheWrite1h)*e.write1hRate()
-	return Micro(math.Round(f))
+	n := e.Input.times(u.Input) + e.Output.times(u.Output) + e.readRate().times(u.CacheRead) +
+		e.CacheWrite.times(u.CacheWrite) + e.write1hRate().times(u.CacheWrite1h)
+	return (n + perMTok/2) / perMTok
 }
+
+const perMTok = 1_000_000
 
 // readRate: models with no cached-input price (OpenAI "pro" models) bill cached
 // tokens as ordinary input. A missing rate must never make tokens free.
-func (e Entry) readRate() float64 {
-	if e.CacheRead > 0 {
+func (e Entry) readRate() Rate {
+	if !e.CacheRead.IsZero() {
 		return e.CacheRead
 	}
 	return e.Input
@@ -113,6 +116,7 @@ func (e Entry) MaxCost(inputTokens, maxOutput int64) Micro {
 	if e.Long != nil && inputTokens > e.LongAbove {
 		return e.Long.MaxCost(inputTokens, maxOutput)
 	}
-	rate := max(e.Input, e.CacheRead, e.CacheWrite, e.write1hRate())
-	return Micro(math.Ceil(float64(inputTokens)*rate + float64(maxOutput)*e.Output))
+	rate := maxRate(e.Input, e.CacheRead, e.CacheWrite, e.write1hRate())
+	n := rate.times(inputTokens) + e.Output.times(maxOutput)
+	return (n + perMTok - 1) / perMTok // round up: a reservation must not fall short
 }

@@ -8,9 +8,10 @@ import (
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 )
 
-func usd(m int64) string { return fmt.Sprintf("$%.2f", float64(m)/1e6) }
+func usd(m int64) string { return money.Format(m) }
 
 // statusCmd prints one line, usable as a Claude Code status line:
 //
@@ -18,7 +19,7 @@ func usd(m int64) string { return fmt.Sprintf("$%.2f", float64(m)/1e6) }
 //
 // With no run argument it uses the newest run.
 func statusCmd(cfg Config, args []string) int {
-	l, err := ledger.Open(cfg.DB)
+	l, err := openLedger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -91,5 +92,5 @@ func runBudget(cfg Config, l *ledger.Ledger, id string) int64 {
 	if b, ok := l.Setting("run_cap"); ok {
 		return b
 	}
-	return int64(cfg.BudgetUSD * 1e6)
+	return int64(cfg.Budget)
 }

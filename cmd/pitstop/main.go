@@ -16,6 +16,7 @@ import (
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/money"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/proxy"
 )
@@ -64,13 +65,17 @@ func serve(cfg Config) {
 	addr := fs.String("addr", cfg.Addr, "listen address (keep it local)")
 	db := fs.String("db", cfg.DB, "ledger path")
 	prices := fs.String("prices", "", "price table JSON (default: built-in)")
-	runCap := fs.Float64("run-cap", cfg.BudgetUSD, "per-run cap, USD (0 = off)")
-	dayCap := fs.Float64("day-cap", 0, "per-day cap, USD (0 = off)")
-	monthCap := fs.Float64("month-cap", 0, "per-month cap, USD (0 = off)")
+	runCap, dayCap, monthCap := &money.Flag{V: int64(cfg.Budget)}, &money.Flag{}, &money.Flag{}
+	fs.Var(runCap, "run-cap", "per-run cap, USD (0 = off)")
+	fs.Var(dayCap, "day-cap", "per-day cap, USD (0 = off)")
+	fs.Var(monthCap, "month-cap", "per-month cap, USD (0 = off)")
 	anthUp := fs.String("anthropic-upstream", "https://api.anthropic.com", "where /v1/messages goes (e.g. a company gateway)")
 	openUp := fs.String("openai-upstream", "https://api.openai.com", "where /v1/chat/completions and /v1/responses go")
 	to := fs.Duration("pause-timeout", 9*time.Minute, "no answer to a pause card in this time: stop and save (keep it under the SDK's 10 minute request timeout)")
 	fs.Parse(os.Args[2:])
+	if err := localAddr(*addr); err != nil {
+		log.Fatal(err)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(*db), 0o700); err != nil {
 		log.Fatal(err)
@@ -101,7 +106,6 @@ func serve(cfg Config) {
 	if tb.Stale(time.Now()) {
 		log.Printf("pitstop: warning: price table %s is over 30 days old. Run: pitstop prices update", tb.Version)
 	}
-	m := func(usd float64) int64 { return int64(usd * 1e6) }
 	a, err := upstream(*anthUp)
 	if err != nil {
 		log.Fatalf("--anthropic-upstream: %v", err)
@@ -118,9 +122,9 @@ func serve(cfg Config) {
 		log.Printf("pitstop: provider %s at /p/%s/ -> %s", name, name, pr.BaseURL)
 	}
 	p := &proxy.Proxy{Prices: tb, Ledger: l, Anthropic: a, OpenAI: o, Providers: provs,
-		Guard: caps.New(caps.Limits{Run: m(*runCap), Day: m(*dayCap), Month: m(*monthCap)}, l)}
+		Guard: caps.New(caps.Limits{Run: runCap.V, Day: dayCap.V, Month: monthCap.V}, l)}
 	// Saved so `pitstop status` and other commands show the caps actually in force.
-	for k, v := range map[string]int64{"run_cap": m(*runCap), "day_cap": m(*dayCap), "month_cap": m(*monthCap)} {
+	for k, v := range map[string]int64{"run_cap": runCap.V, "day_cap": dayCap.V, "month_cap": monthCap.V} {
 		if err := l.SetSetting(k, v); err != nil {
 			log.Fatal(err)
 		}
@@ -147,7 +151,7 @@ func serve(cfg Config) {
 			Budget: c.Budget, P50: c.P50, P90: c.P90, Offered: c.Offer, Added: a.Add, ResponseMS: d.Milliseconds()})
 	}
 	p.Decider = dec
-	log.Printf("pitstop on http://%s (prices %s, run cap $%.2f). Set ANTHROPIC_BASE_URL / OPENAI_BASE_URL to it.", *addr, tb.Version, *runCap)
+	log.Printf("pitstop on http://%s (prices %s, run cap %s). Set ANTHROPIC_BASE_URL / OPENAI_BASE_URL to it.", *addr, tb.Version, money.Format(runCap.V))
 	http.Handle("/", p)
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
