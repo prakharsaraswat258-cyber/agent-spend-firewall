@@ -87,7 +87,7 @@
           <button class="btn amber" id="c-go">Continue +$8.40</button>
           <button class="btn" id="c-stop">Stop &amp; save</button>
         </div>
-        <p class="note" id="c-note">No answer in 10 minutes means stop. Never auto-continue.</p>
+        <p class="note" id="c-note">No answer in 9 minutes means stop. Never auto-continue.</p>
       </div>
     </div>
     <div class="caption">
@@ -215,7 +215,7 @@
     <div class="list">
       <details name="faq" open><summary>Which agents does it work with?</summary><p>Anything that takes a base URL for Anthropic or OpenAI-style APIs: Claude Code with an API key, Codex CLI, Aider, Cline and your own SDK agents. Start them with pitstop run -- &lt;command&gt;.</p></details>
       <details name="faq"><summary>Does it see my code or keys?</summary><p>Keys pass through to the provider and are never written to disk. Prompts and code are never stored. The ledger keeps metadata only: tokens, cost, model, time and tool names.</p></details>
-      <details name="faq"><summary>What if nobody answers the card?</summary><p>After 10 minutes the run stops and your work is saved to a WIP branch. Pitstop never continues on its own.</p></details>
+      <details name="faq"><summary>What if nobody answers the card?</summary><p>After 9 minutes the run stops and your work is saved to a WIP branch. Pitstop never continues on its own.</p></details>
       <details name="faq"><summary>How good is the forecast?</summary><p>Remaining cost is steps left times the average cost per step so far, adjusted for growing context. It is labelled low confidence until 3 steps are done, and every forecast is scored against what really happened.</p></details>
       <details name="faq"><summary>Is it for ChatGPT or Claude.ai plans?</summary><p>No. Flat monthly plans have no per-call bill to protect, and a local proxy can't sit inside those apps. The same goes for Claude Code on a Pro or Max subscription.</p></details>
       <details name="faq"><summary>What happens if the proxy crashes?</summary><p>Agent calls fail rather than slip past your budget. Restart it with pitstop serve and carry on with pitstop resume.</p></details>

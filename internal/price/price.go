@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 )
 
@@ -16,11 +17,13 @@ var embedded []byte
 type Micro = int64
 
 type Entry struct {
-	Provider   string  `json:"provider"`
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
 	CacheRead  float64 `json:"cache_read"`
 	CacheWrite float64 `json:"cache_write"`
+	// Long, when set, replaces these prices for prompts over LongAbove tokens.
+	LongAbove int64  `json:"long_above"`
+	Long      *Entry `json:"long"`
 }
 
 type Table struct {
@@ -49,25 +52,28 @@ func Default() *Table {
 	return t
 }
 
-// Lookup matches exact name, else the longest key that prefixes model.
+// dateSuffix is a dated snapshot of a model: -20250929 or -2024-07-18.
+var dateSuffix = regexp.MustCompile(`^-(\d{8}|\d{4}-\d{2}-\d{2})$`)
+
+// Lookup matches the exact name, or the name plus a date suffix. Nothing looser:
+// a newer model must never borrow an older model's price.
 func (t *Table) Lookup(model string) (Entry, error) {
 	if e, ok := t.Models[model]; ok {
 		return e, nil
 	}
-	best := ""
-	for k := range t.Models {
-		if strings.HasPrefix(model, k) && len(k) > len(best) {
-			best = k
+	if i := strings.LastIndex(model, "-20"); i > 0 && dateSuffix.MatchString(model[i:]) {
+		if e, ok := t.Models[model[:i]]; ok {
+			return e, nil
 		}
 	}
-	if best == "" {
-		return Entry{}, fmt.Errorf("unknown model %q: add it to prices.json (price table %s)", model, t.Version)
-	}
-	return t.Models[best], nil
+	return Entry{}, fmt.Errorf("unknown model %q: add it to prices.json (price table %s)", model, t.Version)
 }
 
 // Cost: tokens * ($/Mtok) is exactly micro-dollars. Rounded once per call.
 func (e Entry) Cost(u Usage) Micro {
+	if e.Long != nil && u.Input+u.CacheRead+u.CacheWrite > e.LongAbove {
+		return e.Long.Cost(u)
+	}
 	f := float64(u.Input)*e.Input + float64(u.Output)*e.Output +
 		float64(u.CacheRead)*e.CacheRead + float64(u.CacheWrite)*e.CacheWrite
 	return Micro(math.Round(f))
@@ -75,6 +81,9 @@ func (e Entry) Cost(u Usage) Micro {
 
 // MaxCost is the worst case for a call: all input at the highest input rate, full max output.
 func (e Entry) MaxCost(inputTokens, maxOutput int64) Micro {
+	if e.Long != nil && inputTokens > e.LongAbove {
+		return e.Long.MaxCost(inputTokens, maxOutput)
+	}
 	rate := math.Max(e.Input, math.Max(e.CacheRead, e.CacheWrite))
 	return Micro(math.Ceil(float64(inputTokens)*rate + float64(maxOutput)*e.Output))
 }

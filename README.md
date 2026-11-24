@@ -10,9 +10,11 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 ```
 
 - Streaming pass-through for `/v1/messages`, `/v1/chat/completions`, `/v1/responses`.
-- Cost in integer micro-dollars from `internal/price/prices.json` (verify prices before trusting).
-- Each call reserves worst-case cost first; run/day/month caps cannot be jointly overshot. Over cap: HTTP 429.
-- Unknown model: HTTP 400 with fix. Keys and prompts are never stored; ledger is metadata only.
+- Cost in integer micro-dollars from `internal/price/prices.json`, copied from the Anthropic and OpenAI pricing pages on 2026-11-24. Anthropic model IDs follow the `claude-<family>-<major>-<minor>` pattern and were not listed on the page.
+- Each call reserves worst-case cost first; run/day/month caps cannot be jointly overshot. Over cap: HTTP 403 (not 429, which SDKs retry).
+- Unknown model: HTTP 400 with fix. Prices match the exact model ID or the ID plus a date suffix (`-20250929`, `-2024-07-18`), never a looser prefix. Haiku 5.5's long-prompt tier (over 100K tokens) is priced; OpenAI long-context rates (over 272K) are not.
+- Requests to paths Pitstop doesn't meter go to the provider whose credentials they carry (`x-api-key` to Anthropic, `Bearer` to OpenAI); with neither, 404.
+- Day and month caps use the machine's local time zone. Keys and prompts are never stored; ledger is metadata only.
 - Header `X-Pitstop-Run` groups calls into runs; default is one run per `serve`.
 
 ## Commands
@@ -20,7 +22,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - `pitstop run -- claude`: registers a run (repo + branch auto-detected), points the agent at the proxy via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` with the run id in the URL path.
 - `pitstop runs`: recent runs with calls and cost.
 
-- Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 429. Reads the request history, keeps only tool names.
+- Loop detector: same tool call or same error repeated 3x records an alert (LOOPS column in `pitstop runs`); 5x blocks the call with HTTP 403. Reads the request history, keeps only tool names.
 
 - `pitstop checkpoint <run>`: commits the run's working tree (incl. untracked, minus .gitignored) to `pitstop/wip/<run>`. Your branch, index and files are untouched. Runs automatically on a loop stop or cap block.
 - `pitstop resume <run>`: reopens Claude Code on the same run (`claude --resume <session>` if the session id was seen, else `claude --continue`), so spend and caps carry on. Other agents: prints manual steps.
@@ -28,7 +30,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - Progress + forecast: the proxy reads the agent's plan from the request history (Claude Code `TodoWrite`, or a `report_progress` tool call with `{done,total}`). Forecast = steps left x average cost per step x context-growth factor (1-2x); p90 = 2 x p50; "low" confidence until 3 steps are done. Each forecast is saved for later accuracy scoring.
 - `pitstop status [run]`: one line, usable as a Claude Code status line: `$3.20 / $5.00 · 3/8 steps · likely $5.33-$10.67 more · on track · medium confidence`. Says "WON'T FIT BUDGET" when spent >= 70% of budget and p50 > what is left. No plan seen means no forecast.
 
-- Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save) or the desktop popup (macOS osascript, Linux zenity). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 10m) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.
+- Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save) or the desktop popup (macOS osascript, Linux zenity). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 9m, under the SDK's 10 minute request timeout) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.
 - Control API (`/pitstop/pending`, `/pitstop/answer`): loopback Host only and an `X-Pitstop: 1` header required, so web pages can't answer cards.
 
 Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.

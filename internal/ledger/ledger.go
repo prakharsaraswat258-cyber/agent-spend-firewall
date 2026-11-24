@@ -289,3 +289,20 @@ func (l *Ledger) Accuracy() (Accuracy, error) {
 	}
 	return a, nil
 }
+
+// RunBudget is a budget a human raised for this run; false means use the default cap.
+func (l *Ledger) RunBudget(run string) (int64, bool) {
+	var b sql.NullInt64
+	if l.db.QueryRow(`SELECT budget_micro FROM runs WHERE id=?`, run).Scan(&b) != nil || !b.Valid {
+		return 0, false
+	}
+	return b.Int64, true
+}
+
+func (l *Ledger) SetRunBudget(run string, micro int64) error {
+	if _, err := l.db.Exec(`INSERT OR IGNORE INTO runs(id,started) VALUES(?,?)`, run, time.Now().Unix()); err != nil {
+		return err
+	}
+	_, err := l.db.Exec(`UPDATE runs SET budget_micro=? WHERE id=?`, micro, run)
+	return err
+}

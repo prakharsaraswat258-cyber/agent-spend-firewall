@@ -86,9 +86,9 @@ type runView struct {
 }
 
 func (p *Proxy) overview(w http.ResponseWriter) {
-	now := time.Now().UTC()
-	day, _ := p.Ledger.SpentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC))
-	month, _ := p.Ledger.SpentSince(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC))
+	now := time.Now()
+	day, _ := p.Ledger.SpentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()))
+	month, _ := p.Ledger.SpentSince(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
 	waiting := map[string]bool{}
 	var cards []any
 	if p.Decider != nil {

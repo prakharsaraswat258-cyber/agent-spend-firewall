@@ -36,7 +36,7 @@ type Proxy struct {
 	Anthropic  *url.URL
 	OpenAI     *url.URL
 	DefaultRun string
-	Decider    *decide.Decider // nil: no pause card, caps block with 429
+	Decider    *decide.Decider // nil: no pause card, caps block with 403
 }
 
 var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
@@ -125,7 +125,9 @@ func (p *Proxy) Respond(id string, cont bool, add int64, channel string) error {
 		return errors.New("no such pending card")
 	}
 	if cont {
-		p.Guard.Raise(c.Run, add)
+		if err := p.Guard.Raise(c.Run, add); err != nil {
+			return fmt.Errorf("could not save the raised budget: %w", err)
+		}
 	}
 	p.Decider.Resolve(id, decide.Answer{Continue: cont, Add: add, Channel: channel})
 	return nil
@@ -171,8 +173,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/v1/chat/completions"), strings.HasPrefix(r.URL.Path, "/v1/responses"):
 		provider, target = "openai", p.OpenAI
 	default:
-		// Non-metered paths (model lists etc.) go to the OpenAI-style upstream untouched.
-		p.forward(w, r, p.OpenAI, nil)
+		// Non-metered paths (model lists etc.) go to the provider the credentials belong to,
+		// so an Anthropic key never reaches OpenAI or the other way round.
+		switch {
+		case r.Header.Get("X-Api-Key") != "" || r.Header.Get("Anthropic-Version") != "":
+			p.forward(w, r, p.Anthropic, nil)
+		case strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "):
+			p.forward(w, r, p.OpenAI, nil)
+		default:
+			http.NotFound(w, r)
+		}
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -186,6 +196,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		MaxTokens int64  `json:"max_tokens"`
 		MaxComp   int64  `json:"max_completion_tokens"`
 		MaxOut    int64  `json:"max_output_tokens"`
+		Metadata  struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.Model == "" {
 		fail(w, provider, 400, "request has no JSON model field")
@@ -208,8 +221,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		run = p.DefaultRun
 	}
 	if provider == "anthropic" && runID != "" {
-		if m := sessionRe.FindSubmatch(body); m != nil {
-			_ = p.Ledger.SetSession(run, string(m[1])) // lets resume reopen the same Claude Code session
+		// Only metadata.user_id: a session id quoted in the conversation must not win.
+		if m := sessionRe.FindStringSubmatch(req.Metadata.UserID); m != nil {
+			_ = p.Ledger.SetSession(run, m[1]) // lets resume reopen the same Claude Code session
 		}
 	}
 	if provider == "anthropic" {
@@ -224,12 +238,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("pitstop: loop alert write failed: %v", err)
 		}
 		if action == "stopped" {
-			fail(w, provider, 429, fmt.Sprintf("Pitstop stopped a loop: %s %q repeated %d times.", lr.Kind, lr.Tool, lr.Count)+p.save(run, "loop"))
+			fail(w, provider, 403, fmt.Sprintf("Pitstop stopped a loop: %s %q repeated %d times.", lr.Kind, lr.Tool, lr.Count)+p.save(run, "loop"))
 			return
 		}
 	}
 	if err := p.admit(run, need); err != nil {
-		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error()+p.save(run, "stop"))
+		fail(w, provider, 403, "Pitstop blocked this call: "+err.Error()+p.save(run, "stop"))
 		return
 	}
 	defer p.Guard.Release(run, need)
@@ -284,11 +298,17 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL,
 	rp.ServeHTTP(w, r)
 }
 
+// fail answers in the provider's error shape. Blocks use 403 because SDKs retry 429,
+// which would re-run the checks and reopen a pause card on every retry.
 func fail(w http.ResponseWriter, provider string, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	if provider == "anthropic" {
-		fmt.Fprintf(w, `{"type":"error","error":{"type":"invalid_request_error","message":%q}}`, msg)
+		typ := "invalid_request_error"
+		if code == http.StatusForbidden {
+			typ = "permission_error"
+		}
+		fmt.Fprintf(w, `{"type":"error","error":{"type":%q,"message":%q}}`, typ, msg)
 		return
 	}
 	fmt.Fprintf(w, `{"error":{"message":%q,"type":"pitstop_blocked"}}`, msg)

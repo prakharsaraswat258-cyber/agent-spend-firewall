@@ -39,6 +39,9 @@ func statusCmd(cfg Config, args []string) int {
 	}
 	spent, _ := l.SpentRun(id)
 	budget := int64(cfg.BudgetUSD * 1e6)
+	if b, ok := l.RunBudget(id); ok { // raised on a decision card
+		budget = b
+	}
 	out := fmt.Sprintf("%s / %s", usd(spent), usd(budget))
 	if r.StepsTotal == 0 {
 		fmt.Println(out + " · no plan seen, forecast unavailable")

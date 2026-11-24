@@ -51,7 +51,7 @@ func setupP(t *testing.T, runCap int64) (*httptest.Server, *ledger.Ledger, *Prox
 
 func post(px *httptest.Server) (*http.Response, string) {
 	resp, _ := http.Post(px.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":1000,"stream":true,"messages":[]}`))
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":1000,"stream":true,"messages":[]}`))
 	b, _ := io.ReadAll(resp.Body)
 	return resp, string(b)
 }
@@ -77,7 +77,7 @@ func TestCapBlocksBeforeSending(t *testing.T) {
 	px, l := setup(t, 500_000) // $0.50; worst case for 1000 max tokens is ~$0.015
 	for i := 0; i < 100; i++ {
 		resp, _ := post(px)
-		if resp.StatusCode == 429 {
+		if resp.StatusCode == 403 {
 			spent, _ := l.SpentRun("r1")
 			if spent > 500_000 {
 				t.Fatalf("overshot cap: %d", spent)
@@ -99,7 +99,7 @@ func TestUnknownModelBlocked(t *testing.T) {
 func TestRunIDInPath(t *testing.T) {
 	px, l := setup(t, 0)
 	resp, _ := http.Post(px.URL+"/run/abc/v1/messages", "application/json",
-		strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":10,"stream":true}`))
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":10,"stream":true}`))
 	if resp.StatusCode != 200 {
 		t.Fatal(resp.StatusCode)
 	}
@@ -122,13 +122,13 @@ func TestLoopStoppedAtFive(t *testing.T) {
 				`{"role":"user","content":[{"type":"tool_result","content":"x"}]}`)
 		}
 		resp, _ := http.Post(px.URL+"/run/lp/v1/messages", "application/json",
-			strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":10,"messages":[`+strings.Join(ms, ",")+`]}`))
+			strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":10,"messages":[`+strings.Join(ms, ",")+`]}`))
 		return resp.StatusCode
 	}
 	if c := send(4); c != 200 {
 		t.Fatalf("4 repeats must warn only, got %d", c)
 	}
-	if c := send(5); c != 429 {
+	if c := send(5); c != 403 {
 		t.Fatalf("5 repeats must stop, got %d", c)
 	}
 	rs, _ := l.Runs(10)
@@ -161,9 +161,9 @@ func TestLoopStopSavesWork(t *testing.T) {
 			`{"role":"user","content":[{"type":"tool_result","content":"x"}]}`)
 	}
 	resp, _ := http.Post(px.URL+"/run/sv/v1/messages", "application/json",
-		strings.NewReader(`{"model":"claude-sonnet-4","messages":[`+strings.Join(ms, ",")+`]}`))
+		strings.NewReader(`{"model":"claude-sonnet-4-5","messages":[`+strings.Join(ms, ",")+`]}`))
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 429 || !strings.Contains(string(b), "pitstop resume sv") {
+	if resp.StatusCode != 403 || !strings.Contains(string(b), "pitstop resume sv") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 	out, _ := exec.Command("git", "-C", d, "show", "pitstop/wip/sv:f").Output()
@@ -176,7 +176,7 @@ func TestProgressTracked(t *testing.T) {
 	px, l := setup(t, 0)
 	todos := `{"todos":[{"status":"completed"},{"status":"completed"},{"status":"completed"},{"status":"pending"},{"status":"pending"}]}`
 	http.Post(px.URL+"/run/pg/v1/messages", "application/json", strings.NewReader(
-		`{"model":"claude-sonnet-4","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"TodoWrite","input":`+todos+`}]}]}`))
+		`{"model":"claude-sonnet-4-5","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"TodoWrite","input":`+todos+`}]}]}`))
 	r, err := l.GetRun("pg")
 	if err != nil || r.StepsDone != 3 || r.StepsTotal != 5 {
 		t.Fatalf("%+v %v", r, err)
@@ -185,7 +185,7 @@ func TestProgressTracked(t *testing.T) {
 
 func smallCall(px *httptest.Server) int {
 	resp, _ := http.Post(px.URL+"/run/dc/v1/messages", "application/json",
-		strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":1000,"stream":true,"messages":[]}`))
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":1000,"stream":true,"messages":[]}`))
 	io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
 }
@@ -230,7 +230,7 @@ func TestCardTimeoutStopsAndSaves(t *testing.T) {
 	p.Decider = decide.New(80 * time.Millisecond)
 	smallCall(px)
 	time.Sleep(50 * time.Millisecond)
-	if c := smallCall(px); c != 429 {
+	if c := smallCall(px); c != 403 {
 		t.Fatalf("no answer must stop, got %d", c)
 	}
 }
@@ -270,5 +270,51 @@ func TestDashboardAndOverview(t *testing.T) {
 	b, _ = io.ReadAll(r2.Body)
 	if !strings.Contains(string(b), `"ID":"dc"`) || !strings.Contains(string(b), `"Spent":11475`) {
 		t.Fatalf("overview: %s", b)
+	}
+}
+
+func TestUnmeteredPathsGoToTheKeysProvider(t *testing.T) {
+	hit := func(name string, got *string) *httptest.Server {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { *got = name }))
+		t.Cleanup(s.Close)
+		return s
+	}
+	var got string
+	a, o := hit("anthropic", &got), hit("openai", &got)
+	au, _ := url.Parse(a.URL)
+	ou, _ := url.Parse(o.URL)
+	l, _ := ledger.Open(filepath.Join(t.TempDir(), "l.db"))
+	px := httptest.NewServer(&Proxy{Prices: price.Default(), Ledger: l, Guard: caps.New(caps.Limits{}, l), Anthropic: au, OpenAI: ou})
+	t.Cleanup(px.Close)
+	get := func(h, v string) (string, int) {
+		got = ""
+		req, _ := http.NewRequest("GET", px.URL+"/v1/models", nil)
+		if h != "" {
+			req.Header.Set(h, v)
+		}
+		resp, _ := http.DefaultClient.Do(req)
+		return got, resp.StatusCode
+	}
+	if g, _ := get("x-api-key", "sk-ant-test"); g != "anthropic" {
+		t.Fatalf("anthropic key went to %q", g)
+	}
+	if g, _ := get("Authorization", "Bearer sk-test"); g != "openai" {
+		t.Fatalf("openai key went to %q", g)
+	}
+	if g, c := get("", ""); g != "" || c != 404 {
+		t.Fatalf("no credentials must not be forwarded: %q %d", g, c)
+	}
+}
+
+func TestSessionIDOnlyFromMetadata(t *testing.T) {
+	px, l := setup(t, 0)
+	l.StartRun(ledger.Run{ID: "ss", Started: time.Now()})
+	real, quoted := "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+	body := `{"model":"claude-sonnet-4-5","max_tokens":10,"metadata":{"user_id":"user_x_session_` + real + `"},` +
+		`"messages":[{"role":"user","content":"log says session_` + quoted + `"}]}`
+	resp, _ := http.Post(px.URL+"/run/ss/v1/messages", "application/json", strings.NewReader(body))
+	io.Copy(io.Discard, resp.Body)
+	if r, _ := l.GetRun("ss"); r.SessionID != real {
+		t.Fatalf("session %q, want %q", r.SessionID, real)
 	}
 }

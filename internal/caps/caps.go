@@ -8,10 +8,13 @@ import (
 	"time"
 )
 
-// Spent is the ledger view the caps need.
+// Spent is the ledger view the caps need. Run budgets raised by a human live
+// there too, so they survive a proxy restart.
 type Spent interface {
 	SpentRun(run string) (int64, error)
 	SpentSince(t time.Time) (int64, error)
+	RunBudget(run string) (int64, bool)
+	SetRunBudget(run string, micro int64) error
 }
 
 // Limits in micro-dollars; 0 means no limit.
@@ -23,12 +26,11 @@ type Guard struct {
 	S        Spent
 	Now      func() time.Time
 	reserved map[string]int64 // run -> reserved
-	runCap   map[string]int64 // per-run overrides after a human raised the budget
 	total    int64
 }
 
 func New(l Limits, s Spent) *Guard {
-	return &Guard{L: l, S: s, Now: time.Now, reserved: map[string]int64{}, runCap: map[string]int64{}}
+	return &Guard{L: l, S: s, Now: time.Now, reserved: map[string]int64{}}
 }
 
 type Denied struct {
@@ -47,7 +49,7 @@ func usd(m int64) float64 { return float64(m) / 1e6 }
 func (g *Guard) Reserve(run string, need int64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	now := g.Now().UTC()
+	now := g.Now() // local time: "per day" means the user's day
 	checks := []struct {
 		scope string
 		cap   int64
@@ -55,11 +57,11 @@ func (g *Guard) Reserve(run string, need int64) error {
 	}{
 		{"run", g.runCapLocked(run), func() (int64, error) { n, e := g.S.SpentRun(run); return n + g.reserved[run], e }},
 		{"day", g.L.Day, func() (int64, error) {
-			n, e := g.S.SpentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC))
+			n, e := g.S.SpentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()))
 			return n + g.total, e
 		}},
 		{"month", g.L.Month, func() (int64, error) {
-			n, e := g.S.SpentSince(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC))
+			n, e := g.S.SpentSince(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
 			return n + g.total, e
 		}},
 	}
@@ -88,7 +90,7 @@ func (g *Guard) Release(run string, amt int64) {
 }
 
 func (g *Guard) runCapLocked(run string) int64 {
-	if c, ok := g.runCap[run]; ok {
+	if c, ok := g.S.RunBudget(run); ok {
 		return c
 	}
 	return g.L.Run
@@ -101,11 +103,12 @@ func (g *Guard) RunCap(run string) int64 {
 	return g.runCapLocked(run)
 }
 
-// Raise adds budget to one run. Day and month caps stay owner-only: no API here.
-func (g *Guard) Raise(run string, add int64) {
+// Raise adds budget to one run and stores it. Day and month caps stay owner-only: no API here.
+func (g *Guard) Raise(run string, add int64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if c := g.runCapLocked(run); c > 0 && add > 0 {
-		g.runCap[run] = c + add
+		return g.S.SetRunBudget(run, c+add)
 	}
+	return nil
 }

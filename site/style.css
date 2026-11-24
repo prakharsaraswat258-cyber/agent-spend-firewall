@@ -69,30 +69,14 @@ h1, h2, .display { font-family: var(--display); font-weight: 700; letter-spacing
 /* chart (signature) */
 .chart-wrap { position: relative; height: 300vh; background: var(--field-1); color: var(--field-1-ink); }
 .chart-pin { position: sticky; top: 0; height: 100svh; overflow: hidden; display: grid; grid-template-rows: auto auto 1fr auto; padding: 32px var(--m) 28px; }
-.chart-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; }
-.chart-head h2 { font-size: var(--step-head); max-width: 12em; }
 .ticker { display: flex; gap: clamp(16px, 3vw, 48px); font-variant-numeric: tabular-nums; }
 .ticker div { display: grid; gap: 4px; }
 .ticker span { font-size: var(--step-small); color: #a8a8a8; }
 .ticker b { font: 700 clamp(1.4rem, 2.4vw, 2.4rem)/1 var(--display); letter-spacing: -0.03em; }
 .ticker .up { color: #ff5a4f; }
 .plot { position: relative; margin-top: 20px; min-height: 0; }
-.plot svg { width: 100%; height: 100%; overflow: visible; }
-.plot .grid line { stroke: #2a2a2a; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.plot .wick { stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.plot .cum { fill: none; stroke: #ffffff; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
-.plot .budget { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 8 6; vector-effect: non-scaling-stroke; }
-.plot .cone { fill: var(--accent); opacity: 0; }
-.plot .p50 { opacity: 0; fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.plot .pausebar { fill: var(--accent); opacity: 0; }
-.axis { position: absolute; inset: 0; pointer-events: none; font-size: 13px; color: #a8a8a8; font-variant-numeric: tabular-nums; }
-.axis span { position: absolute; right: 0; transform: translateY(-50%); background: var(--field-1); padding-left: 6px; }
-.axis .blabel { color: #ff5a4f; font-weight: 600; }
 .caption { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
 .caption p { font-size: var(--step-lead); max-width: 30ch; line-height: 1.3; min-height: 2.6em; transition: opacity .3s; }
-.budget-ctl { display: grid; gap: 8px; font-size: 15px; min-width: min(320px, 100%); }
-.budget-ctl input { accent-color: var(--accent); width: 100%; height: 28px; cursor: pointer; }
-.budget-ctl output { font-weight: 600; }
 
 .card { position: absolute; z-index: 5; left: clamp(8px, 3vw, 48px); top: 4%; width: min(400px, 86vw); background: #fff; color: var(--ink); padding: 22px; box-shadow: 0 24px 60px rgba(0,0,0,.45); /* taste-skill-ignore: the decision card floats over the chart */ opacity: 0; transform: translateY(24px) scale(.97); transition: opacity .45s var(--ease), transform .45s var(--ease); pointer-events: none; }
 .card.show { opacity: 1; transform: none; pointer-events: auto; }
@@ -228,7 +212,6 @@ details p { padding: 0 24px 24px; max-width: 52ch; font-size: 17px; }
   .hero h1 { font-size: 13vw; }
   .stage { position: relative; inset: auto; left: calc(-1 * var(--m)); width: 100vw; height: 520px; margin-top: 48px; clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 72px, 72px 72px, 72px 0); }
   .term { position: absolute; left: calc(var(--m) + 16px); top: auto; bottom: 0; width: calc(100vw - 32px); font-size: 14px; }
-  .chart-head h2 { font-size: 34px; }
   .ticker { width: 100%; justify-content: space-between; }
   .card { top: 2%; right: 50%; transform: translate(50%, 24px) scale(.97); }
   .card.show { transform: translate(50%, 0); }
@@ -274,7 +257,6 @@ details p { padding: 0 24px 24px; max-width: 52ch; font-size: 17px; }
 .tv-bar .tabs button[aria-pressed=true] { background: #2a2a2a; color: #fff; }
 .tv-bar .ticker b { font-size: clamp(1.1rem, 1.6vw, 1.5rem); }
 .tv { position: absolute; inset: 0; }
-.plot.tv-on svg, .plot.tv-on .axis { display: none; }
 .plot:not(.tv-on) .tv { display: none; }
 @media (max-width: 860px) { .tv-bar .tabs button { padding: 8px 8px; font-size: 13px; } .tv-bar .ticker { width: auto; } }
 

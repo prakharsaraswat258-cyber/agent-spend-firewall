@@ -57,7 +57,7 @@ func serve(cfg Config) {
 	runCap := fs.Float64("run-cap", cfg.BudgetUSD, "per-run cap, USD (0 = off)")
 	dayCap := fs.Float64("day-cap", 0, "per-day cap, USD (0 = off)")
 	monthCap := fs.Float64("month-cap", 0, "per-month cap, USD (0 = off)")
-	to := fs.Duration("pause-timeout", 10*time.Minute, "no answer to a pause card in this time: stop and save")
+	to := fs.Duration("pause-timeout", 9*time.Minute, "no answer to a pause card in this time: stop and save (keep it under the SDK's 10 minute request timeout)")
 	fs.Parse(os.Args[2:])
 
 	tb := price.Default()
