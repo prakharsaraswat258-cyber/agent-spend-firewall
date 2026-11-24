@@ -457,3 +457,157 @@ WHERE r.ended IS NOT NULL GROUP BY r.id HAVING COUNT(c.id) >= 2`)
 	sort.Slice(spans, func(i, j int) bool { return spans[i] < spans[j] })
 	return time.Duration(spans[len(spans)/2]) * time.Second
 }
+
+// SpendPoint is the run's total spend after one call.
+type SpendPoint struct {
+	At  int64 // unix seconds
+	Cum int64 // micro-dollars spent so far
+}
+
+// Series is the run's spend over time, one point per call (for the cost curve).
+func (l *Ledger) Series(run string) ([]SpendPoint, error) {
+	rows, err := l.db.Query(`SELECT at, cost_micro FROM calls WHERE run_id=? ORDER BY id`, run)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SpendPoint
+	var cum int64
+	for rows.Next() {
+		var at, c int64
+		if err := rows.Scan(&at, &c); err != nil {
+			return nil, err
+		}
+		cum += c
+		out = append(out, SpendPoint{at, cum})
+	}
+	return out, rows.Err()
+}
+
+type CheckpointRow struct {
+	At                     int64
+	Branch, Commit, Reason string
+}
+
+func (l *Ledger) Checkpoints(run string) ([]CheckpointRow, error) {
+	rows, err := l.db.Query(`SELECT at, branch, commit_sha, reason FROM checkpoints WHERE run_id=? ORDER BY id`, run)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CheckpointRow
+	for rows.Next() {
+		var c CheckpointRow
+		if err := rows.Scan(&c.At, &c.Branch, &c.Commit, &c.Reason); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+type DecisionRow struct {
+	Run, Reason, Answer, Channel  string
+	Asked                         int64
+	Spent, Budget, Offered, Added int64
+	ResponseMS                    int64
+}
+
+// Decisions lists a run's decision cards and answers ("" run = all runs), newest first.
+func (l *Ledger) Decisions(run string, since time.Time, limit int) ([]DecisionRow, error) {
+	rows, err := l.db.Query(`SELECT run_id, reason, COALESCE(answer,''), COALESCE(channel,''), asked_at, spent_micro, budget_micro, offered_micro, COALESCE(added_micro,0), COALESCE(response_ms,0)
+FROM decisions WHERE (?='' OR run_id=?) AND asked_at + COALESCE(response_ms,0)/1000 >= ? ORDER BY id DESC LIMIT ?`, run, run, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DecisionRow
+	for rows.Next() {
+		var d DecisionRow
+		if err := rows.Scan(&d.Run, &d.Reason, &d.Answer, &d.Channel, &d.Asked, &d.Spent, &d.Budget, &d.Offered, &d.Added, &d.ResponseMS); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+type LoopRow struct {
+	At                 int64
+	Kind, Tool, Action string
+	Repeats            int
+}
+
+func (l *Ledger) LoopAlerts(run string) ([]LoopRow, error) {
+	rows, err := l.db.Query(`SELECT at, kind, tool, action, repeats FROM loop_alerts WHERE run_id=? ORDER BY id DESC LIMIT 50`, run)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LoopRow
+	for rows.Next() {
+		var r LoopRow
+		if err := rows.Scan(&r.At, &r.Kind, &r.Tool, &r.Action, &r.Repeats); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// HistoryRun is a run as the History page lists it.
+type HistoryRun struct {
+	ID, Repo, Branch, Agent, Outcome string
+	Started, Ended                   int64
+	CostMicro, Calls                 int64
+	Stopped                          bool
+}
+
+// History lists runs newest first, optionally filtered by repo and agent.
+func (l *Ledger) History(repo, agent string, limit int) ([]HistoryRun, error) {
+	rows, err := l.db.Query(`SELECT r.id, COALESCE(r.repo,''), COALESCE(r.branch,''), COALESCE(r.agent,''), COALESCE(r.outcome,''),
+ COALESCE(r.started,0), COALESCE(r.ended,0), COALESCE(SUM(c.cost_micro),0), COUNT(c.id), COALESCE(r.stopped,0)
+FROM runs r LEFT JOIN calls c ON c.run_id=r.id
+WHERE (?='' OR r.repo=?) AND (?='' OR r.agent=?)
+GROUP BY r.id ORDER BY r.started DESC, r.rowid DESC LIMIT ?`, repo, repo, agent, agent, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HistoryRun
+	for rows.Next() {
+		var h HistoryRun
+		if err := rows.Scan(&h.ID, &h.Repo, &h.Branch, &h.Agent, &h.Outcome, &h.Started, &h.Ended, &h.CostMicro, &h.Calls, &h.Stopped); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// Distinct lists the repos and agents seen, for the History filters.
+func (l *Ledger) Distinct() (repos, agents []string) {
+	for _, q := range []struct {
+		col string
+		dst *[]string
+	}{{"repo", &repos}, {"agent", &agents}} {
+		rows, err := l.db.Query(`SELECT DISTINCT ` + q.col + ` FROM runs WHERE COALESCE(` + q.col + `,'')<>'' ORDER BY 1`)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var s string
+			if rows.Scan(&s) == nil {
+				*q.dst = append(*q.dst, s)
+			}
+		}
+		rows.Close()
+	}
+	return
+}
+
+// Outcome returns how a run ended ("finished", "stopped", "ended") and when; "" while open.
+func (l *Ledger) Outcome(run string) (outcome string, ended int64) {
+	l.db.QueryRow(`SELECT COALESCE(outcome,''), COALESCE(ended,0) FROM runs WHERE id=?`, run).Scan(&outcome, &ended)
+	return
+}
