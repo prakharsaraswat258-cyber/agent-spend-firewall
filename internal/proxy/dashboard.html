@@ -49,7 +49,8 @@ async function tick(){
     const b=el('div','banner');
     b.append(el('b','','Needs your decision: '+c.Run));
     b.append(el('p','',c.Reason==='cap'?'Budget reached: '+usd(c.Spent)+' of '+usd(c.Budget)+' used.':
-      c.Done+' of '+c.Total+' steps done, '+usd(c.Spent)+' of '+usd(c.Budget)+' used. Likely '+usd(c.P10)+' to '+usd(c.P90)+' more ('+c.Confidence+' confidence).'));
+      (c.Method==='rate'?'No plan seen; from the spending rate. ':c.Done+' of '+c.Total+' steps done, ')+usd(c.Spent)+' of '+usd(c.Budget)+' used. Likely '+usd(c.P10)+' to '+usd(c.P90)+' more ('+c.Confidence+' confidence).'));
+    if((c.LastActions||[]).length)b.append(el('p','mute','Last actions: '+c.LastActions.join(', ')));
     const g=el('button','go','Continue +'+usd(c.Offer));g.onclick=()=>answer(c.ID,true,c.Offer);
     const x=el('button','','Stop & save');x.onclick=()=>answer(c.ID,false,0);
     b.append(g,document.createTextNode(' '),x);cs.append(b)}
@@ -61,12 +62,16 @@ async function tick(){
     const st=el('td');st.append(r.Total?document.createTextNode(r.Done+'/'+r.Total+' '):el('span','mute','no plan'));if(r.Total)st.append(bar(r.Done/r.Total,''));tr.append(st);
     const m=el('td');m.append(document.createTextNode(usd(r.Spent)+(r.Budget?' / '+usd(r.Budget):'')));
     if(r.Budget){const f=r.Spent/r.Budget;m.append(bar(f,f>=1?'bad':f>=.7?'warn':''))}tr.append(m);
-    tr.append(el('td','hide',r.Total?usd(r.P10)+'–'+usd(r.P90):'–'));
+    tr.append(el('td','hide',r.Method?usd(r.P10)+'–'+usd(r.P90)+(r.Method==='rate'?' (rate)':''):'–'));
     const sc=el('td');sc.append(el('span','chip '+(r.Status==='needs you'?'needs':r.Status),r.Status));tr.append(sc);tb.append(tr);
     if(open===r.ID){
       const d=el('tr','detail'),td=el('td');td.colSpan=6;
-      let cl=[];try{cl=await (await fetch('/pitstop/calls?run='+encodeURIComponent(r.ID),H)).json()||[]}catch(e){}
+      let cl=[],pl=[];try{cl=await (await fetch('/pitstop/calls?run='+encodeURIComponent(r.ID),H)).json()||[]}catch(e){}
+      try{pl=await (await fetch('/pitstop/plan?run='+encodeURIComponent(r.ID),H)).json()||[]}catch(e){}
       td.append(el('div','mute',r.Calls+' calls, '+r.Loops+' loop alerts. Resume: pitstop resume '+r.ID));
+      if(pl.length){const pt=el('table');pt.append(el('caption','mute','Plan · cost while each step was in progress'));
+        for(const s of pl){const rw=el('tr');rw.append(el('td','',s.Status==='completed'?'✓':s.Status==='in_progress'?'▸':'○'),el('td','',s.Text),el('td','',s.Calls?usd(s.CostMicro)+' · '+s.Calls+' calls':'–'));pt.append(rw)}
+        td.append(pt)}
       const t=el('table');
       for(const c of cl){const rw=el('tr');for(const x of [new Date(c.At*1000).toLocaleTimeString(),c.Model,c.Input+' in',c.Output+' out',c.CacheRead+' cache read',usd(c.CostMicro)])rw.append(el('td','',x));t.append(rw)}
       td.append(t);d.append(td);tb.append(d)}

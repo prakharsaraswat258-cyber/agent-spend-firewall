@@ -43,6 +43,10 @@ type Proxy struct {
 	broken error // set when a ledger write failed: every metered call is blocked until restart
 	bandAt time.Time
 	bandV  forecast.Band
+	typV   time.Duration
+	// Per run, from the latest request: the step in progress and the last tool names.
+	current map[string]string
+	actions map[string][]string
 }
 
 // band is the calibrated forecast range, recomputed at most once a minute.
@@ -50,9 +54,46 @@ func (p *Proxy) band() forecast.Band {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if time.Since(p.bandAt) > time.Minute {
-		p.bandV, p.bandAt = p.Ledger.Band(), time.Now()
+		p.bandV, p.typV, p.bandAt = p.Ledger.Band(), p.Ledger.TypicalRunLength(), time.Now()
 	}
 	return p.bandV
+}
+
+func (p *Proxy) typical() time.Duration {
+	p.band()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.typV
+}
+
+// Forecast is the run's cost-to-finish: from its plan when one was seen, else
+// from its spending rate (always low confidence). Not Valid when neither works yet.
+func (p *Proxy) Forecast(run string, spent int64) (forecast.Forecast, ledger.Run) {
+	r, _ := p.Ledger.GetRun(run)
+	if r.StepsTotal > 0 {
+		costs, _ := p.Ledger.CallCosts(run)
+		return forecast.ComputeWith(p.band(), spent, costs, r.StepsDone, r.StepsTotal), r
+	}
+	span, _ := p.Ledger.ActiveSpan(run)
+	return forecast.Rate(p.band(), spent, span, p.typical()), r
+}
+
+func (p *Proxy) setRunState(run, step string, actions []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.current == nil {
+		p.current, p.actions = map[string]string{}, map[string][]string{}
+	}
+	p.current[run] = step
+	if len(actions) > 0 {
+		p.actions[run] = actions
+	}
+}
+
+func (p *Proxy) runState(run string) (step string, actions []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.current[run], p.actions[run]
 }
 
 var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
@@ -99,7 +140,7 @@ func (p *Proxy) admit(run string, need int64) error {
 		if errors.As(err, &d) && d.Scope == "run" {
 			c := p.baseCard(run, "cap")
 			c.Spent, c.Budget = d.Used, d.Cap
-			c.Offer = max(d.Cap/2, d.Need) // no plan: offer half the budget again
+			c.Offer = offer(max(d.Cap/2, d.Need)) // offer half the budget again
 			if err := p.ask(run, c); err != nil {
 				return err
 			}
@@ -112,22 +153,27 @@ func (p *Proxy) admit(run string, need int64) error {
 
 func (p *Proxy) baseCard(run, reason string) decide.Card {
 	spent, _ := p.Ledger.SpentRun(run)
-	return decide.Card{Run: run, Reason: reason, Spent: spent, Budget: p.Guard.RunCap(run)}
+	_, actions := p.runState(run)
+	return decide.Card{Run: run, Reason: reason, Spent: spent, Budget: p.Guard.RunCap(run), LastActions: actions}
+}
+
+// offer rounds a budget raise up to the next $0.50, so the card shows a plain number.
+func offer(micro int64) int64 {
+	const step = 500_000
+	return max((micro+step-1)/step*step, step)
 }
 
 func (p *Proxy) forecastCard(run string) (decide.Card, bool) {
 	c := p.baseCard(run, "forecast")
-	r, err := p.Ledger.GetRun(run)
-	if err != nil || r.StepsTotal == 0 {
-		return c, false
-	}
-	costs, _ := p.Ledger.CallCosts(run)
-	f := forecast.ComputeWith(p.band(), c.Spent, costs, r.StepsDone, r.StepsTotal)
+	f, r := p.Forecast(run, c.Spent)
 	if !forecast.WillOverrun(c.Spent, c.Budget, f) {
 		return c, false
 	}
-	c.P10, c.P50, c.P90, c.Confidence, c.Done, c.Total = f.P10, f.P50, f.P90, f.Confidence, r.StepsDone, r.StepsTotal
-	c.Offer = max(c.Spent+f.P90-c.Budget, 1) // raise budget enough to cover the p90 finish
+	c.P10, c.P50, c.P90, c.Confidence, c.Method = f.P10, f.P50, f.P90, f.Confidence, f.Method
+	if f.HasPlan {
+		c.Done, c.Total = r.StepsDone, r.StepsTotal
+	}
+	c.Offer = offer(c.Spent + f.P90 - c.Budget) // enough to cover the high end, rounded up to $0.50
 	return c, true
 }
 
@@ -216,8 +262,18 @@ func (p *Proxy) Respond(id string, cont bool, add int64, channel string) error {
 // trackProgress stores the agent's plan state and saves a forecast whenever a step completes.
 func (p *Proxy) trackProgress(run string, body []byte) {
 	pr := progress.Parse(body)
+	p.setRunState(run, pr.Current(), progress.LastTools(body, 3))
 	if !pr.Found {
 		return
+	}
+	if len(pr.Steps) > 0 {
+		rows := make([]ledger.StepRow, len(pr.Steps))
+		for i, s := range pr.Steps {
+			rows[i] = ledger.StepRow{Text: s.Text, Status: s.Status}
+		}
+		if err := p.Ledger.SetPlan(run, rows); err != nil {
+			log.Printf("pitstop: plan write failed: %v", err)
+		}
 	}
 	changed, err := p.Ledger.SetProgress(run, pr.Done, pr.Total)
 	if err != nil || !changed {
@@ -333,7 +389,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if provider == "anthropic" {
 		p.trackProgress(run, body)
+	} else {
+		p.setRunState(run, "", progress.LastTools(body, 3))
 	}
+	step, _ := p.runState(run) // the call's cost belongs to the step in progress now
 	if lr := loop.Detect(body); lr.Count >= loop.Warn {
 		action := "warned"
 		if lr.Count >= loop.Stop {
@@ -368,7 +427,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := p.Ledger.Record(ledger.Call{
 			RunID: run, Provider: provider, Model: req.Model,
 			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, CacheWrite1h: u.CacheWrite1h,
-			CostMicro: entry.Cost(u), LatencyMS: time.Since(start).Milliseconds(), At: start, Estimated: estimated,
+			CostMicro: entry.Cost(u), LatencyMS: time.Since(start).Milliseconds(), At: start, Estimated: estimated, Step: step,
 		}); err != nil {
 			// Fail closed: spend is no longer tracked, so no further call may go out.
 			p.setBroken(err)

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"encoding/json"
-	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"net"
 	"net/http"
@@ -28,13 +27,16 @@ func (p *Proxy) Control(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing X-Pitstop header", http.StatusForbidden)
 		return
 	}
-	if p.Decider == nil && !strings.HasSuffix(r.URL.Path, "/overview") && !strings.HasSuffix(r.URL.Path, "/calls") && !strings.HasSuffix(r.URL.Path, "/gate") {
+	if p.Decider == nil && !strings.HasSuffix(r.URL.Path, "/overview") && !strings.HasSuffix(r.URL.Path, "/calls") && !strings.HasSuffix(r.URL.Path, "/gate") && !strings.HasSuffix(r.URL.Path, "/plan") {
 		http.Error(w, "decision cards are off", http.StatusNotFound)
 		return
 	}
 	switch {
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/overview"):
 		p.overview(w)
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/plan"):
+		steps, _ := p.Ledger.Plan(r.URL.Query().Get("run"))
+		json.NewEncoder(w).Encode(steps)
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/calls"):
 		cs, _ := p.Ledger.Calls(r.URL.Query().Get("run"), 100)
 		json.NewEncoder(w).Encode(cs)
@@ -93,7 +95,7 @@ type runView struct {
 	ID, Repo, Branch, Agent, Status string
 	Spent, Budget, P10, P50, P90    int64
 	Done, Total, Calls, Loops       int
-	Confidence                      string
+	Confidence, Method              string
 }
 
 func (p *Proxy) overview(w http.ResponseWriter) {
@@ -123,10 +125,8 @@ func (p *Proxy) overview(w http.ResponseWriter) {
 		if waiting[r.ID] {
 			v.Status = "needs you"
 		}
-		if r.StepsTotal > 0 {
-			costs, _ := p.Ledger.CallCosts(r.ID)
-			f := forecast.ComputeWith(p.band(), r.CostMicro, costs, r.StepsDone, r.StepsTotal)
-			v.P10, v.P50, v.P90, v.Confidence = f.P10, f.P50, f.P90, f.Confidence
+		if f, _ := p.Forecast(r.ID, r.CostMicro); f.Valid() {
+			v.P10, v.P50, v.P90, v.Confidence, v.Method = f.P10, f.P50, f.P90, f.Confidence, f.Method
 		}
 		views = append(views, v)
 	}

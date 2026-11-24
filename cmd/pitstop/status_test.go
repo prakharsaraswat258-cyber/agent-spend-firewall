@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 )
 
@@ -28,5 +29,17 @@ func TestStatusUsesTheCapsServeRuns(t *testing.T) {
 	}
 	if b := runBudget(cfg, l, caps.Untagged+"20261124"); b != 0 {
 		t.Fatalf("untagged run has no run cap, got %d", b)
+	}
+}
+
+func TestFitLabel(t *testing.T) {
+	f := forecast.Forecast{Method: "plan", P50: 2_000_000, P90: 4_000_000}
+	for _, c := range []struct {
+		spent, budget int64
+		want          string
+	}{{1_000_000, 10_000_000, "on track"}, {7_000_000, 10_000_000, "tight"}, {8_500_000, 10_000_000, "WON'T FIT BUDGET"}, {1, 0, "no run cap"}} {
+		if got := fitLabel(c.spent, c.budget, f); got != c.want {
+			t.Errorf("spent %d budget %d: %q want %q", c.spent, c.budget, got, c.want)
+		}
 	}
 }

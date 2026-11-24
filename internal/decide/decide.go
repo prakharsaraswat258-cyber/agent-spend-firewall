@@ -20,6 +20,8 @@ type Card struct {
 	Confidence    string
 	Done          int
 	Total         int
+	Method        string   // "plan" or "rate" for forecast cards
+	LastActions   []string // tool names only, newest last
 	Asked         time.Time
 }
 

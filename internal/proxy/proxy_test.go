@@ -522,3 +522,58 @@ func TestRunsForUntaggedCalls(t *testing.T) {
 		t.Fatalf("untagged run %s spent %d", untagged, got)
 	}
 }
+
+// Each call's cost goes to the plan step in progress; the plan keeps step names.
+func TestCostPerStep(t *testing.T) {
+	px, l, _ := setupP(t, 0)
+	todos := `{"todos":[{"content":"Read the code","status":"completed"},{"content":"Fix the bug","status":"in_progress"},{"content":"Add tests","status":"pending"}]}`
+	resp, _ := http.Post(px.URL+"/run/st/v1/messages", "application/json", strings.NewReader(
+		`{"model":"claude-sonnet-4-5","max_tokens":10,"stream":true,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"TodoWrite","input":`+todos+`},{"type":"tool_use","name":"Edit","input":{}}]}]}`))
+	io.Copy(io.Discard, resp.Body)
+	var plan []ledger.PlanStep
+	for i := 0; i < 100; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if plan, _ = l.Plan("st"); len(plan) == 3 && plan[1].CostMicro > 0 {
+			break
+		}
+	}
+	if len(plan) != 3 || plan[1].Text != "Fix the bug" || plan[1].CostMicro != 11475 || plan[0].CostMicro != 0 || plan[2].Status != "pending" {
+		t.Fatalf("%+v", plan)
+	}
+}
+
+// No plan at all: the pause still comes early, from the spending rate.
+func TestRateForecastPausesWithoutPlan(t *testing.T) {
+	_, l, p := setupP(t, 10_000_000) // $10 run budget
+	p.Decider = decide.New(5 * time.Second)
+	now := time.Now()
+	l.Record(ledger.Call{RunID: "rt", CostMicro: 4_000_000, At: now.Add(-10 * time.Minute)})
+	l.Record(ledger.Call{RunID: "rt", CostMicro: 4_000_000, At: now}) // $8 in 10 min; a typical run is 20 min
+	got := make(chan string)
+	go func() { got <- p.Gate("rt") }()
+	var c decide.Card
+	for i := 0; i < 200 && c.ID == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if ps := p.Decider.Pending(); len(ps) == 1 {
+			c = ps[0]
+		}
+	}
+	if c.Reason != "forecast" || c.Method != "rate" || c.Confidence != "low" || c.Offer%500_000 != 0 || c.Offer < c.Spent+c.P90-c.Budget {
+		t.Fatalf("card %+v", c)
+	}
+	if !strings.Contains(c.Text(), "No plan seen") {
+		t.Fatal(c.Text())
+	}
+	p.Respond(c.ID, true, c.Offer, "test")
+	if msg := <-got; msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+func TestOfferRoundsUpToFiftyCents(t *testing.T) {
+	for in, want := range map[int64]int64{1: 500_000, 500_000: 500_000, 500_001: 1_000_000, 9_120_000: 9_500_000} {
+		if got := offer(in); got != want {
+			t.Errorf("offer(%d) = %d, want %d", in, got, want)
+		}
+	}
+}

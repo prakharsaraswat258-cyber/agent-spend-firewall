@@ -3,6 +3,7 @@ package ledger
 
 import (
 	"database/sql"
+	"sort"
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
@@ -21,6 +22,8 @@ type Call struct {
 	// Estimated: the stream was cut off before the provider's final usage event,
 	// so some token counts were estimated on the high side.
 	Estimated bool
+	// Step is the plan step in progress when the call was made ("" if none).
+	Step string
 }
 
 func Open(path string) (*Ledger, error) {
@@ -53,6 +56,11 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	}
 	db.Exec("ALTER TABLE runs ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0")
 	db.Exec("ALTER TABLE forecasts ADD COLUMN p10_micro INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE forecasts ADD COLUMN method TEXT NOT NULL DEFAULT 'plan'")
+	db.Exec("ALTER TABLE calls ADD COLUMN step TEXT NOT NULL DEFAULT ''")
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS plan_steps(run_id TEXT, position INTEGER, text TEXT, status TEXT, PRIMARY KEY(run_id, position))`); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value INTEGER)`); err != nil {
 		return nil, err
 	}
@@ -66,9 +74,9 @@ func (l *Ledger) Record(c Call) error {
 	if err != nil {
 		return err
 	}
-	_, err = l.db.Exec(`INSERT INTO calls(run_id,provider,model,input,output,cache_read,cache_write,cache_write_1h,cost_micro,latency_ms,at,estimated)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, c.RunID, c.Provider, c.Model, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.CacheWrite1h,
-		c.CostMicro, c.LatencyMS, c.At.Unix(), c.Estimated)
+	_, err = l.db.Exec(`INSERT INTO calls(run_id,provider,model,input,output,cache_read,cache_write,cache_write_1h,cost_micro,latency_ms,at,estimated,step)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, c.RunID, c.Provider, c.Model, c.Input, c.Output, c.CacheRead, c.CacheWrite, c.CacheWrite1h,
+		c.CostMicro, c.LatencyMS, c.At.Unix(), c.Estimated, c.Step)
 	return err
 }
 
@@ -197,8 +205,12 @@ func (l *Ledger) CallCosts(run string) ([]int64, error) {
 
 // SaveForecast keeps every forecast shown, so accuracy can be scored when the run ends.
 func (l *Ledger) SaveForecast(run string, spent int64, f forecast.Forecast, done, total int) error {
-	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p10_micro,p50_micro,p90_micro,confidence,steps_done,steps_total) VALUES(?,?,?,?,?,?,?,?,?)`,
-		run, time.Now().Unix(), spent, f.P10, f.P50, f.P90, f.Confidence, done, total)
+	method := f.Method
+	if method == "" {
+		method = "plan"
+	}
+	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p10_micro,p50_micro,p90_micro,confidence,steps_done,steps_total,method) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		run, time.Now().Unix(), spent, f.P10, f.P50, f.P90, f.Confidence, done, total, method)
 	return err
 }
 
@@ -293,7 +305,7 @@ func (l *Ledger) Accuracy() (Accuracy, error) {
 	var a Accuracy
 	for _, id := range ids {
 		var r AccRun
-		if l.db.QueryRow(`SELECT spent_micro,COALESCE(p10_micro,0),p50_micro,p90_micro FROM forecasts WHERE run_id=? AND confidence='medium' ORDER BY id LIMIT 1`, id).
+		if l.db.QueryRow(`SELECT spent_micro,COALESCE(p10_micro,0),p50_micro,p90_micro FROM forecasts WHERE run_id=? AND confidence='medium' AND COALESCE(method,'plan')='plan' ORDER BY id LIMIT 1`, id).
 			Scan(&r.AtSpent, &r.P10, &r.P50, &r.P90) != nil {
 			continue // never forecast with enough steps: not scoreable
 		}
@@ -384,4 +396,91 @@ func (l *Ledger) Setting(key string) (int64, bool) {
 		return 0, false
 	}
 	return v, true
+}
+
+// StepRow is one plan step as stored (name and status only).
+type StepRow struct{ Text, Status string }
+
+// PlanStep is a stored step with the money spent while it was in progress.
+type PlanStep struct {
+	Position     int
+	Text, Status string
+	CostMicro    int64
+	Calls        int64
+}
+
+// SetPlan replaces a run's plan snapshot.
+func (l *Ledger) SetPlan(run string, steps []StepRow) error {
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM plan_steps WHERE run_id=?`, run); err != nil {
+		return err
+	}
+	for i, s := range steps {
+		if _, err := tx.Exec(`INSERT INTO plan_steps(run_id,position,text,status) VALUES(?,?,?,?)`, run, i, s.Text, s.Status); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Plan returns the run's steps in order with the cost of the calls made while
+// each was in progress. Calls made with no step in progress are not shown.
+func (l *Ledger) Plan(run string) ([]PlanStep, error) {
+	rows, err := l.db.Query(`SELECT p.position, p.text, p.status,
+ COALESCE((SELECT SUM(c.cost_micro) FROM calls c WHERE c.run_id=p.run_id AND c.step=p.text),0),
+ (SELECT COUNT(*) FROM calls c WHERE c.run_id=p.run_id AND c.step=p.text)
+FROM plan_steps p WHERE p.run_id=? ORDER BY p.position`, run)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanStep
+	for rows.Next() {
+		var s PlanStep
+		if err := rows.Scan(&s.Position, &s.Text, &s.Status, &s.CostMicro, &s.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ActiveSpan is the time between a run's first and last call (0 with under 2 calls).
+func (l *Ledger) ActiveSpan(run string) (time.Duration, error) {
+	var lo, hi sql.NullInt64
+	err := l.db.QueryRow(`SELECT MIN(at), MAX(at) FROM calls WHERE run_id=?`, run).Scan(&lo, &hi)
+	if err != nil || !lo.Valid {
+		return 0, err
+	}
+	return time.Duration(hi.Int64-lo.Int64) * time.Second, nil
+}
+
+// DefaultRunLength is the assumed run length until 3 finished runs exist.
+const DefaultRunLength = 20 * time.Minute
+
+// TypicalRunLength is the median active span of finished runs (DefaultRunLength
+// until there are 3 of them).
+func (l *Ledger) TypicalRunLength() time.Duration {
+	rows, err := l.db.Query(`SELECT MAX(c.at)-MIN(c.at) FROM runs r JOIN calls c ON c.run_id=r.id
+WHERE r.ended IS NOT NULL GROUP BY r.id HAVING COUNT(c.id) >= 2`)
+	if err != nil {
+		return DefaultRunLength
+	}
+	defer rows.Close()
+	var spans []int64
+	for rows.Next() {
+		var s int64
+		if rows.Scan(&s) == nil && s > 0 {
+			spans = append(spans, s)
+		}
+	}
+	if len(spans) < 3 {
+		return DefaultRunLength
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i] < spans[j] })
+	return time.Duration(spans[len(spans)/2]) * time.Second
 }

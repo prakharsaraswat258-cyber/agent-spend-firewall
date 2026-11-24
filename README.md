@@ -37,6 +37,13 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save), the dashboard, a desktop popup (macOS osascript, Linux zenity), or Telegram (see Notifications). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 9m, under the SDK's 10 minute request timeout) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.
 - Control API (`/pitstop/pending`, `/pitstop/answer`): loopback Host only and an `X-Pitstop: 1` header required, so web pages can't answer cards.
 
+## Steps, cost per step, and runs with no plan
+- The plan is kept with step names (cut to 120 characters; step names are allowed metadata, prompts and code are not) from Claude Code's `TaskCreate`/`TaskUpdate`, `TodoWrite`, or a `report_progress` call with `{"steps":[{"text","status"}]}` (or `{done,total}`).
+- Each call's cost is booked to the step in progress when it was made. The dashboard's run detail shows the plan as a checklist with the money spent on each step.
+- No plan seen: the forecast comes from the spending rate. That is cost per minute so far, times the minutes a typical run of yours still has left: the median length of your finished runs, 20 minutes until there are 3. It is always low confidence, never scored for accuracy, and uses the same pause rule (70% spent and the likely cost more than what is left).
+- `pitstop status` ends with `on track`, `tight` (the likely cost fits but the high end does not) or `WON'T FIT BUDGET`.
+- Decision cards show the agent's last 3 actions (tool names only, never their inputs). The Continue amount covers the high end of the range, rounded up to the next $0.50.
+
 ## Health check and prices
 - `pitstop doctor`: one line per check with a fix for each problem. It checks that the address is local only, the ledger is writable, the proxy is running and not blocking calls, the price table's version and age (warns after 30 days), the caps in force, Claude Code (and Codex / Aider if found), the pause hook, and notifications. Exits 1 if anything needs fixing.
 - `pitstop prices`: shows the table in use (version, source, age, models). `pitstop prices show <model>` shows one entry.

@@ -5,12 +5,34 @@ package forecast
 import (
 	"math"
 	"sort"
+	"time"
 )
 
 type Forecast struct {
 	HasPlan       bool
 	P10, P50, P90 int64  // micro-dollars still to spend; shown as the range P10-P90
-	Confidence    string // "low" until 3 steps are done, then "medium"
+	Confidence    string // "low" until 3 steps are done, then "medium"; always "low" for rate
+	Method        string // "plan" (steps left) or "rate" (no plan: spending rate); "" = no forecast
+}
+
+// Valid reports whether there is a forecast to show or act on.
+func (f Forecast) Valid() bool { return f.Method != "" }
+
+// MinRateSpan is how long a run must have been spending before a rate forecast is made.
+const MinRateSpan = 2 * time.Minute
+
+// Rate forecasts a run with no plan from its spending rate: cost per minute so far
+// times the minutes a typical run still has left. A run already past the typical
+// length is assumed to need a quarter more. Always low confidence.
+func Rate(b Band, spent int64, active, typical time.Duration) Forecast {
+	if spent <= 0 || active < MinRateSpan {
+		return Forecast{Confidence: "low"}
+	}
+	expected := max(typical, active+active/4)
+	perMin := float64(spent) / active.Minutes()
+	p50 := int64(math.Round(perMin * (expected - active).Minutes()))
+	return Forecast{Method: "rate", Confidence: "low", P50: p50,
+		P10: int64(math.Round(b.Lo * float64(p50))), P90: int64(math.Round(b.Hi * float64(p50)))}
 }
 
 // Band turns the p50 into the shown range: P10 = Lo x P50, P90 = Hi x P50.
@@ -32,7 +54,7 @@ func ComputeWith(b Band, spent int64, costs []int64, done, total int) Forecast {
 	if total <= 0 || done < 0 || done > total {
 		return Forecast{Confidence: "low"}
 	}
-	f := Forecast{HasPlan: true, Confidence: "low"}
+	f := Forecast{HasPlan: true, Confidence: "low", Method: "plan"}
 	if done >= 3 {
 		f.Confidence = "medium"
 	}
@@ -87,7 +109,7 @@ func growth(costs []int64) float64 {
 
 // WillOverrun is the pause rule: past 70% of budget AND p50 more than what is left.
 func WillOverrun(spent, budget int64, f Forecast) bool {
-	if budget <= 0 || !f.HasPlan {
+	if budget <= 0 || !f.Valid() {
 		return false
 	}
 	return float64(spent) >= 0.7*float64(budget) && f.P50 > budget-spent

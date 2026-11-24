@@ -45,20 +45,38 @@ func statusCmd(cfg Config, args []string) int {
 	if budget == 0 {
 		out = usd(spent) + " (no run cap)"
 	}
-	if r.StepsTotal == 0 {
-		fmt.Println(out + " · no plan seen, forecast unavailable")
+	var f forecast.Forecast
+	if r.StepsTotal > 0 {
+		costs, _ := l.CallCosts(id)
+		f = forecast.ComputeWith(l.Band(), spent, costs, r.StepsDone, r.StepsTotal)
+		out += fmt.Sprintf(" · %d/%d steps", r.StepsDone, r.StepsTotal)
+	} else {
+		span, _ := l.ActiveSpan(id)
+		f = forecast.Rate(l.Band(), spent, span, l.TypicalRunLength())
+		out += " · no plan"
+	}
+	if !f.Valid() {
+		fmt.Println(out + " · too early to forecast")
 		return 0
 	}
-	costs, _ := l.CallCosts(id)
-	f := forecast.ComputeWith(l.Band(), spent, costs, r.StepsDone, r.StepsTotal)
-	out += fmt.Sprintf(" · %d/%d steps · likely %s-%s more", r.StepsDone, r.StepsTotal, usd(f.P10), usd(f.P90))
-	if forecast.WillOverrun(spent, budget, f) {
-		out += " · WON'T FIT BUDGET"
-	} else {
-		out += " · on track"
-	}
+	out += fmt.Sprintf(" · likely %s-%s more", usd(f.P10), usd(f.P90))
+	out += " · " + fitLabel(spent, budget, f)
 	fmt.Println(out + " · " + f.Confidence + " confidence")
 	return 0
+}
+
+// fitLabel: "WON'T FIT BUDGET" when the pause rule fires, "tight" when the likely
+// cost fits but the high end does not, else "on track".
+func fitLabel(spent, budget int64, f forecast.Forecast) string {
+	switch {
+	case budget <= 0:
+		return "no run cap"
+	case forecast.WillOverrun(spent, budget, f):
+		return "WON'T FIT BUDGET"
+	case spent+f.P90 > budget:
+		return "tight"
+	}
+	return "on track"
 }
 
 // runBudget is the budget the proxy enforces for a run: a raise from a decision

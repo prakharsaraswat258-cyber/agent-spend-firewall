@@ -60,3 +60,36 @@ func TestBandCalibratesFromFinishedRuns(t *testing.T) {
 		t.Fatalf("band did not learn: %+v", b)
 	}
 }
+
+func TestPlanAndRunLength(t *testing.T) {
+	l, err := Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	l.SetPlan("r", []StepRow{{"a", "completed"}, {"b", "in_progress"}})
+	l.Record(Call{RunID: "r", CostMicro: 100, Step: "a", At: time.Now()})
+	l.Record(Call{RunID: "r", CostMicro: 250, Step: "b", At: time.Now()})
+	l.Record(Call{RunID: "r", CostMicro: 7, At: time.Now()})                            // no step in progress
+	l.SetPlan("r", []StepRow{{"a", "completed"}, {"b", "completed"}, {"c", "pending"}}) // a newer snapshot replaces the old
+	ps, _ := l.Plan("r")
+	if len(ps) != 3 || ps[0].CostMicro != 100 || ps[1].CostMicro != 250 || ps[1].Status != "completed" || ps[2].Calls != 0 {
+		t.Fatalf("%+v", ps)
+	}
+	if l.TypicalRunLength() != DefaultRunLength {
+		t.Fatal("no history: default length")
+	}
+	base := time.Now().Add(-time.Hour)
+	for i, mins := range []int{10, 30, 50} {
+		id := string(rune('x' + i))
+		l.Record(Call{RunID: id, CostMicro: 1, At: base})
+		l.Record(Call{RunID: id, CostMicro: 1, At: base.Add(time.Duration(mins) * time.Minute)})
+		l.EndRun(id)
+	}
+	if got := l.TypicalRunLength(); got != 30*time.Minute {
+		t.Fatalf("median run length %v", got)
+	}
+	if s, _ := l.ActiveSpan("y"); s != 30*time.Minute {
+		t.Fatalf("span %v", s)
+	}
+}
