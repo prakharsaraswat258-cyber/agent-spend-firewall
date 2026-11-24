@@ -39,3 +39,6 @@ Not verified: cost vs provider console (needs 20 real runs), real Claude Code se
 - Dashboard: http://127.0.0.1:4546/dashboard (same port as the proxy). Today/month spend, waiting decision cards with Continue/Stop buttons, runs with step and money bars, click a run for its calls. Static page, no external requests; data comes from `/pitstop/*` with the guard header.
 
 - Accuracy score: `pitstop run` closes the run when the agent exits (finished = plan complete, stopped = plan incomplete, ended = no plan) and prints total cost, whether the forecast held, and loop alerts. `pitstop accuracy` and the dashboard show "right N of M" once 5 finished runs have a forecast. A forecast counts as right when the cost actually spent after the earliest medium-confidence forecast (3+ steps done) is within its p90. Upper bound only: a forecast far too high still counts as right.
+
+## Website
+`site/` is the landing page (`index.html`) and a sign-in page (`login.html`). Static files, no build step: `cd site && python3 -m http.server 8765`, then open http://localhost:8765. The sign-in page has no backend yet: nothing typed there is sent or stored. The scroll-zoom chart uses TradingView Lightweight Charts and Lenis from unpkg, and its gain and loss figures are a made-up sample company, not real data.

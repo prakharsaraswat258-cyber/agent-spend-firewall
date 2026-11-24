@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pitstop — know what finishing will cost</title>
+<meta name="description" content="Open-source spend firewall for AI coding agents. Pauses a run before it overspends, shows how far along it is and what finishing will likely cost.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script>document.documentElement.classList.remove('no-js')</script>
+</head>
+<body>
+
+<header class="nav">
+  <a class="wordmark" href="#top" aria-label="Pitstop home"><i></i>pitstop</a>
+  <nav aria-label="Main">
+    <ul>
+      <li class="hide"><a href="#chart">How it pauses</a></li>
+      <li class="hide"><a href="#features">Features</a></li>
+      <li class="hide"><a href="#pricing">Pricing</a></li>
+      <li><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub</a></li>
+      <li><a class="btn small" href="login.html">Sign in</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="top">
+
+<section class="hero" aria-labelledby="h1">
+  <h1 id="h1" class="rise">Know the cost first.</h1>
+  <p class="lede rise">Pitstop pauses your AI agent before it overspends, shows how far along it is and what finishing will likely cost, then lets you continue or stop without losing work.</p>
+  <div class="act rise">
+    <a class="btn red" href="#start">Set a budget</a>
+    <code>go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest</code>
+  </div>
+  <div class="stage" aria-hidden="true"></div>
+  <div class="term" data-ui aria-label="Terminal running Claude Code through Pitstop">
+    <div class="bar"><span>~/code/checkout-service</span><span>zsh</span></div>
+    <div class="ln" id="typed"></div>
+    <div class="status"><span><b id="st-spent">$0.00</b> / $10</span><span><b id="st-steps">0/8</b> steps</span><span id="st-state">on track</span></div>
+  </div>
+</section>
+
+<section class="chart-wrap" id="chart" aria-labelledby="chart-h">
+  <div class="chart-pin">
+    <div class="tv-head">
+      <div class="sym">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <h2 id="chart-h">AI gains, until the bill lands.</h2>
+          <span class="ex">NET GAIN FROM AI · sample company · daily, in thousands of dollars</span>
+        </div>
+      </div>
+      <div class="quote" aria-live="off">
+        <b id="tk-spent">$0.0k</b><span class="cur">net gain</span>
+        <span class="chg" id="tk-chg">+$0.000 (+0.00%)</span>
+      </div>
+    </div>
+    <div class="tv-bar">
+      <div class="tabs" role="group" aria-label="Zoom">
+        <button type="button" data-n="30">1M</button>
+        <button type="button" data-n="90">3M</button>
+        <button type="button" data-n="180">6M</button>
+        <button type="button" data-n="0">All</button>
+      </div>
+      <div class="ticker">
+        <div><span>AI spend today</span><b id="tk-calls">$0.0k</b></div>
+        <div><span>Agents running</span><b id="tk-steps">0</b></div>
+        <div><span>Status</span><b class="up" id="tk-last">growing</b></div>
+      </div>
+    </div>
+    <div class="plot" data-ui>
+      <div id="tv" class="tv"></div>
+      <div class="card" id="card" data-ui role="dialog" aria-label="Pitstop decision card">
+        <h3><i></i>Run paused: won't fit</h3>
+        <dl>
+          <dt>Progress</dt><dd id="c-steps">5 of 8 steps</dd>
+          <dt>Spent</dt><dd id="c-spent">$7.10 of $10</dd>
+          <dt>Likely to finish</dt><dd id="c-range">$4.20 – $8.40 more</dd>
+          <dt>Confidence</dt><dd id="c-conf">medium</dd>
+          <dt>Loop risk</dt><dd>none seen</dd>
+        </dl>
+        <div class="meter" aria-hidden="true"><i id="c-meter" style="width:71%"></i><b id="c-mark" style="left:calc(100% - 3px)"></b></div>
+        <div class="row">
+          <button class="btn amber" id="c-go">Continue +$8.40</button>
+          <button class="btn" id="c-stop">Stop &amp; save</button>
+        </div>
+        <p class="note" id="c-note">No answer in 10 minutes means stop. Never auto-continue.</p>
+      </div>
+    </div>
+    <div class="caption">
+      <p id="cap">Your agents ship work. The gains add up.</p>
+      <p class="legend"><span class="k up"></span>AI gains <span class="k dn"></span>Without Pitstop <span class="k ps"></span>With Pitstop</p>
+    </div>
+  </div>
+  <noscript><p style="padding:24px">The chart needs JavaScript. In short: AI agents build real gains, until one overspends and the bill wipes them out. Pitstop pauses that run before the bill lands.</p></noscript>
+</section>
+
+<section class="strip" aria-labelledby="how-h">
+  <div class="field">
+    <div>
+      <h2 id="how-h" class="rise">How a run goes</h2>
+      <p class="sub rise">One command in front of the agent you already use.</p>
+    </div>
+    <div class="rcard rise" data-ui>
+      <div class="t">run 1124-2050</div>
+      <div class="kv"><span>agent</span><b>claude</b></div>
+      <div class="kv"><span>repo</span><b>checkout-service</b></div>
+      <div class="kv"><span>budget</span><b>$10.00</b></div>
+      <span class="tag">started</span>
+    </div>
+    <p class="cl rise">First, it meters every call.</p>
+  </div>
+  <div class="field">
+    <div></div>
+    <div class="rcard rise" data-ui>
+      <div class="t">run 1124-2050</div>
+      <div class="kv"><span>steps</span><b>3 of 8</b></div>
+      <div class="kv"><span>spent</span><b>$3.40</b></div>
+      <div class="kv"><span>likely more</span><b>$5.10 – $10.20</b></div>
+      <div class="mini"><i style="width:34%"></i></div>
+      <span class="tag dark">on track</span>
+    </div>
+    <p class="cl rise">Then it reads the plan.</p>
+  </div>
+  <div class="field">
+    <div></div>
+    <div class="rcard rise" data-ui>
+      <div class="t">run 1124-2050</div>
+      <div class="kv"><span>steps</span><b>5 of 8</b></div>
+      <div class="kv"><span>spent</span><b>$7.10</b></div>
+      <div class="kv"><span>likely more</span><b>$4.20 – $8.40</b></div>
+      <div class="mini"><i style="width:71%"></i></div>
+      <span class="tag amber">needs you</span>
+    </div>
+    <p class="cl rise">It pauses when it won't fit.</p>
+  </div>
+  <div class="field">
+    <div></div>
+    <div class="rcard rise" data-ui>
+      <div class="t">run 1124-2050</div>
+      <div class="kv"><span>outcome</span><b>finished</b></div>
+      <div class="kv"><span>total</span><b>$13.30</b></div>
+      <div class="kv"><span>forecast</span><b>right</b></div>
+      <div class="mini"><i style="width:100%"></i></div>
+      <span class="tag red">saved to wip branch</span>
+    </div>
+    <p class="cl rise">You choose. Nothing is lost.</p>
+  </div>
+</section>
+
+<section class="section" id="features" aria-labelledby="feat-h">
+  <div class="board">
+    <div class="tile head t62 rise">
+      <h2 id="feat-h">Built around the pause</h2>
+      <p>Everything else is the base that makes the pause trustworthy.</p>
+    </div>
+    <div class="tile dark t64 rise">
+      <div data-ui style="font-size:clamp(48px,7vw,104px);left:8%;top:14%" aria-hidden="true"><span class="big">$0.011475</span></div>
+      <div class="cap"><b>Exact cost meter</b><span>Input, output, cache read and cache write tokens, priced from a versioned table in integer micro-dollars.</span></div>
+    </div>
+    <div class="tile red t34 rise">
+      <div data-ui style="font-size:clamp(34px,4vw,60px);right:14%;top:12%" aria-hidden="true"><span class="sw"><i></i></span></div>
+      <div class="cap"><b>Hard caps</b><span>Per run, day and month. Each call reserves its worst case first, so parallel runs can't overshoot.</span></div>
+    </div>
+    <div class="tile t32 grey rise">
+      <div data-ui style="font-size:34px;right:-8%;top:14%" aria-hidden="true"><span class="key">ctrl</span><span class="key">c</span></div>
+      <div class="cap"><b>Loop detector</b><span>Same call 5 times: stopped.</span></div>
+    </div>
+    <div class="tile t32 rise">
+      <div data-ui style="font-size:40px;left:46%;top:10%" aria-hidden="true"><span class="blk">5/8</span></div>
+      <div class="cap"><b>Reads the plan</b><span>TodoWrite or report_progress.</span></div>
+    </div>
+    <div class="tile t62 grey rise">
+      <div data-ui style="font-size:clamp(30px,3.4vw,50px);right:-4%;top:12%" aria-hidden="true"><span class="big">pitstop/wip/1124-2050</span></div>
+      <div class="cap"><b>Stop without losing work</b><span>Your working tree is committed to a WIP branch. Your own branch, index and files stay untouched.</span></div>
+    </div>
+    <div class="tile red t32 rise">
+      <div data-ui style="font-size:56px;right:8%;top:12%" aria-hidden="true"><span class="big">8/10</span></div>
+      <div class="cap"><b>Public accuracy</b><span>Forecasts scored on your runs.</span></div>
+    </div>
+    <div class="tile dark t32 rise">
+      <div data-ui style="font-size:30px;left:24%;top:16%" aria-hidden="true"><span class="key">127.0.0.1</span></div>
+      <div class="cap"><b>Nothing leaves</b><span>Keys pass through, never stored.</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pricing" aria-labelledby="price-h">
+  <div class="price">
+    <div class="l rise">
+      <h2 id="price-h">Free, and it stays free</h2>
+      <p>The local core is open source under Apache-2.0. It runs on your machine, as one binary, with no account.</p>
+    </div>
+    <div class="r rise">
+      <div class="notchmark" aria-hidden="true"></div>
+      <div class="figure" aria-label="0 dollars"><sup>$</sup>0<small>per month</small></div>
+      <ul class="incl">
+        <li>Proxy for Anthropic and OpenAI-style APIs</li>
+        <li>Caps, loop stops and the decision card</li>
+        <li>Checkpoint, resume and the local dashboard</li>
+        <li>Every future local feature</li>
+      </ul>
+      <a class="btn red" href="#start">Set a budget</a>
+      <p class="later">A hosted Team plan, with shared runs and approvals for leads, is planned from $99 a month. It is not available yet.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="faq-h">
+  <div class="faq">
+    <h2 id="faq-h">Fair questions</h2>
+    <div class="list">
+      <details name="faq" open><summary>Which agents does it work with?</summary><p>Anything that takes a base URL for Anthropic or OpenAI-style APIs: Claude Code with an API key, Codex CLI, Aider, Cline and your own SDK agents. Start them with pitstop run -- &lt;command&gt;.</p></details>
+      <details name="faq"><summary>Does it see my code or keys?</summary><p>Keys pass through to the provider and are never written to disk. Prompts and code are never stored. The ledger keeps metadata only: tokens, cost, model, time and tool names.</p></details>
+      <details name="faq"><summary>What if nobody answers the card?</summary><p>After 10 minutes the run stops and your work is saved to a WIP branch. Pitstop never continues on its own.</p></details>
+      <details name="faq"><summary>How good is the forecast?</summary><p>Remaining cost is steps left times the average cost per step so far, adjusted for growing context. It is labelled low confidence until 3 steps are done, and every forecast is scored against what really happened.</p></details>
+      <details name="faq"><summary>Is it for ChatGPT or Claude.ai plans?</summary><p>No. Flat monthly plans have no per-call bill to protect, and a local proxy can't sit inside those apps. The same goes for Claude Code on a Pro or Max subscription.</p></details>
+      <details name="faq"><summary>What happens if the proxy crashes?</summary><p>Agent calls fail rather than slip past your budget. Restart it with pitstop serve and carry on with pitstop resume.</p></details>
+      <details name="faq"><summary>What does an unknown model cost?</summary><p>Pitstop blocks the call with a clear message until the model is in the price table. A wrong price would be a bug in the one thing you trust it for.</p></details>
+    </div>
+  </div>
+</section>
+
+<section class="cta" id="start" aria-labelledby="cta-h">
+  <div class="l rise">
+    <h2 id="cta-h">Set your first budget.</h2>
+    <p>Pick an agent and a budget. Copy the two commands, and your next run pauses before it costs more than you agreed to.</p>
+  </div>
+  <form class="dialog rise" data-ui id="setup" aria-label="Set up Pitstop">
+    <h3>New run budget</h3>
+    <label for="f-budget">Budget per run, in dollars</label>
+    <input id="f-budget" type="number" min="1" max="500" step="1" value="5" inputmode="decimal">
+    <label id="seg-l">Agent</label>
+    <div class="seg" role="group" aria-labelledby="seg-l">
+      <button type="button" aria-pressed="true" data-a="claude">Claude Code</button>
+      <button type="button" aria-pressed="false" data-a="codex">Codex</button>
+      <button type="button" aria-pressed="false" data-a="aider">Aider</button>
+    </div>
+    <div class="cmd" id="cmd"></div>
+    <button class="btn red" type="submit">Copy commands</button>
+    <p class="ok" id="ok" aria-live="polite"></p>
+  </form>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="mark" aria-label="pitstop">
+    <span style="height:100%">p</span><span style="height:72%">i</span><span style="height:88%">t</span><span style="height:64%">s</span><span style="height:94%">t</span><span style="height:76%">o</span><span style="height:100%">p</span>
+  </div>
+  <div class="links">
+    <div><b>Product</b><a href="#chart">How it pauses</a><a href="#features">Features</a><a href="#pricing">Pricing</a></div>
+    <div><b>Code</b><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall#readme">README</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall/issues">Issues</a></div>
+    <div><b>Account</b><a href="login.html">Sign in</a><a href="login.html#signup">Join the Team plan list</a></div>
+    <div class="contact"><b>Runs on your machine</b><span>Listens on 127.0.0.1:4546. Apache-2.0.</span><span>Chart drawn with <a href="https://www.tradingview.com/lightweight-charts/">TradingView Lightweight Charts</a> (Apache-2.0).</span></div>
+  </div>
+  <div class="last"><span>Pitstop is a working name. Not affiliated with any model provider.</span><a class="btn small light" href="#top">Back to top</a></div>
+</footer>
+
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
