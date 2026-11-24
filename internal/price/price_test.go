@@ -58,3 +58,43 @@ func TestOneHourCacheWrite(t *testing.T) {
 		t.Fatalf("openai max %d", o.MaxCost(1000, 0))
 	}
 }
+
+// Pinned from the official pricing pages (2026-11-24). A failing row means the table
+// was edited: re-check the page before changing the test.
+func TestPinnedPrices(t *testing.T) {
+	tb := Default()
+	for _, c := range []struct {
+		model             string
+		in, out, cr, cw1h float64
+	}{
+		{"claude-opus-5-5", 4, 20, 0.2, 8},
+		{"claude-sonnet-5-5", 2, 10, 0.1, 4},
+		{"claude-fable-5-2", 8, 40, 0.2, 16},
+		{"claude-mythos-5-2", 8, 40, 0.2, 16},
+		{"claude-haiku-5-5", 0.1, 0.5, 0.01, 0.2},
+		{"claude-haiku-4-5", 1, 5, 0.1, 2},
+		{"gpt-6.2-astra", 8, 40, 0.4, 0},
+		{"gpt-5.4-mini", 0.75, 4.5, 0.075, 0},
+	} {
+		e, err := tb.Lookup(c.model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Input != c.in || e.Output != c.out || e.CacheRead != c.cr || e.write1hRate() != c.cw1h {
+			t.Errorf("%s: %+v (1h %v)", c.model, e, e.write1hRate())
+		}
+	}
+}
+
+func TestOpenAILongContextAndProCache(t *testing.T) {
+	e, _ := Default().Lookup("gpt-6.2-sol")
+	short := e.Cost(Usage{Input: 272_000, Output: 1000}) // 272000*2 + 1000*10
+	long := e.Cost(Usage{Input: 272_001, Output: 1000})  // 272001*4 + 1000*15
+	if short != 554_000 || long != 1_103_004 {
+		t.Fatalf("short %d long %d", short, long)
+	}
+	pro, _ := Default().Lookup("gpt-5.5-pro") // no cached price: cached tokens cost full input
+	if c := pro.Cost(Usage{CacheRead: 1000}); c != 30_000 {
+		t.Fatalf("pro cached tokens billed %d, want 30000", c)
+	}
+}

@@ -41,3 +41,20 @@ func TestPauseRule(t *testing.T) {
 		t.Fatal("forecast fits: stay silent")
 	}
 }
+
+func TestRangeAndCalibration(t *testing.T) {
+	f := Compute(6_100_000, []int64{3_000_000, 3_100_000}, 3, 8)
+	if f.P10 != f.P50/2 && f.P10 != (f.P50+1)/2 {
+		t.Fatalf("default P10 %d for P50 %d", f.P10, f.P50)
+	}
+	if b := Calibrate([]float64{1, 1}); b != DefaultBand {
+		t.Fatal("too little history must keep the default")
+	}
+	b := Calibrate([]float64{0.9, 1.0, 1.1, 1.2, 1.3, 0.95, 1.05})
+	if b.Lo < 0.85 || b.Lo > 0.95 || b.Hi < 1.2 || b.Hi > 1.3 {
+		t.Fatalf("tight history should narrow the band: %+v", b)
+	}
+	if b := Calibrate([]float64{0.01, 0.01, 0.01, 50, 50, 50}); b.Lo != 0.2 || b.Hi != 5 {
+		t.Fatalf("clamps: %+v", b)
+	}
+}

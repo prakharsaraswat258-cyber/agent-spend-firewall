@@ -22,7 +22,7 @@ func cardText(c decide.Card) string {
 		fmt.Fprintf(&b, "Budget reached on run %s: %s of %s used.\n", c.Run, usd(c.Spent), usd(c.Budget))
 	} else {
 		fmt.Fprintf(&b, "Run %s will not fit its budget.\n%d of %d steps done, %s of %s used.\nLikely %s to %s more to finish (%s confidence).\n",
-			c.Run, c.Done, c.Total, usd(c.Spent), usd(c.Budget), usd(c.P50), usd(c.P90), c.Confidence)
+			c.Run, c.Done, c.Total, usd(c.Spent), usd(c.Budget), usd(c.P10), usd(c.P90), c.Confidence)
 	}
 	return b.String()
 }

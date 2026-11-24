@@ -370,7 +370,7 @@ func TestLedgerFailureBlocksLaterCalls(t *testing.T) {
 	post(px)  // goes out (already admitted), its write fails
 	time.Sleep(50 * time.Millisecond)
 	resp, body := post(px)
-	if resp.StatusCode != 503 || !strings.Contains(body, "ledger could not be written") {
+	if (resp.StatusCode != 503 && resp.StatusCode != 403) || !strings.Contains(body, "Pitstop blocked this call") {
 		t.Fatalf("%d %s", resp.StatusCode, body)
 	}
 }
@@ -420,5 +420,105 @@ func TestSideEndpoints(t *testing.T) {
 	}
 	if s, _ := l.SpentRun("r"); s != 0 {
 		t.Fatalf("free calls billed %d", s)
+	}
+}
+
+// The PreToolUse hook's gate: allow under budget, pause on a card when the next
+// call won't fit, and keep a stopped run stopped until resume.
+func TestGatePausesAtSafePointAndStopSticks(t *testing.T) {
+	px, l, p := setupP(t, 20_000)
+	p.Decider = decide.New(5 * time.Second)
+	if msg := p.Gate("dc"); msg != "" {
+		t.Fatalf("fresh run must pass: %s", msg)
+	}
+	smallCall(px) // spends 11475 of 20000
+	time.Sleep(50 * time.Millisecond)
+	got := make(chan string)
+	go func() { got <- p.Gate("dc") }() // next call (~11475) won't fit: must wait for a human
+	var c decide.Card
+	for i := 0; i < 200 && c.ID == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if ps := p.Decider.Pending(); len(ps) == 1 {
+			c = ps[0]
+		}
+	}
+	if c.ID == "" || c.Reason != "cap" {
+		t.Fatalf("no card: %+v", c)
+	}
+	p.Respond(c.ID, false, 0, "test")
+	if msg := <-got; !strings.Contains(msg, "you chose Stop") {
+		t.Fatalf("stop answer: %q", msg)
+	}
+	// Stopped sticks: the model call is refused too, with no new card.
+	resp, _ := http.Post(px.URL+"/run/dc/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":10,"messages":[]}`))
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 403 || !strings.Contains(string(b), "pitstop resume dc") || len(p.Decider.Pending()) != 0 {
+		t.Fatalf("stopped run must stay stopped: %d %s", resp.StatusCode, b)
+	}
+	// Resume clears it; the card then appears again because the budget is still spent.
+	l.SetStopped("dc", false)
+	go func() { got <- p.Gate("dc") }()
+	for i := 0; i < 200 && len(p.Decider.Pending()) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	c = p.Decider.Pending()[0]
+	p.Respond(c.ID, true, 1_000_000, "test")
+	if msg := <-got; msg != "" {
+		t.Fatalf("continue must allow: %q", msg)
+	}
+}
+
+func TestGateEndpoint(t *testing.T) {
+	px, _, p := setupP(t, 0)
+	p.Decider = nil // gate works without decision cards too
+	req, _ := http.NewRequest("POST", px.URL+"/pitstop/gate", strings.NewReader(`{"run":"g"}`))
+	req.Header.Set("X-Pitstop", "1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), `"allow":true`) {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+}
+
+// Calls without `pitstop run`: one run per Claude Code session, and calls with no
+// identity at all go to a daily run that only the day/month caps limit.
+func TestRunsForUntaggedCalls(t *testing.T) {
+	px, l, p := setupP(t, 1) // $0.000001 run cap
+	p.DefaultRun = ""
+	cc := `{"model":"claude-sonnet-4-5","max_tokens":10,"stream":true,"metadata":{"user_id":"user_x_session_abcdef12-1111-1111-1111-111111111111"},"messages":[]}`
+	resp, _ := http.Post(px.URL+"/v1/messages", "application/json", strings.NewReader(cc))
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != 403 { // a session run gets the run cap
+		t.Fatalf("session run must be capped: %d", resp.StatusCode)
+	}
+	l.SetRunBudget("cc-abcdef12", 1_000_000) // as after a Continue on that session's card
+	resp, _ = http.Post(px.URL+"/v1/messages", "application/json", strings.NewReader(cc))
+	io.Copy(io.Discard, resp.Body)
+	var sess int64
+	for i := 0; i < 100 && sess == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		sess, _ = l.SpentRun("cc-abcdef12")
+	}
+	if resp.StatusCode != 200 || sess != 11475 {
+		t.Fatalf("session run: %d spent %d", resp.StatusCode, sess)
+	}
+	resp, _ = http.Post(px.URL+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4-5","max_tokens":10,"stream":true,"messages":[]}`))
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("untagged call must not hit a run cap: %d", resp.StatusCode)
+	}
+	untagged := caps.Untagged + time.Now().Format("20060102")
+	var got int64
+	for i := 0; i < 100 && got == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		got, _ = l.SpentRun(untagged)
+	}
+	if got != 11475 {
+		t.Fatalf("untagged run %s spent %d", untagged, got)
 	}
 }

@@ -90,9 +90,18 @@ func (e Entry) Cost(u Usage) Micro {
 		return e.Long.Cost(u)
 	}
 	f := float64(u.Input)*e.Input + float64(u.Output)*e.Output +
-		float64(u.CacheRead)*e.CacheRead + float64(u.CacheWrite)*e.CacheWrite +
+		float64(u.CacheRead)*e.readRate() + float64(u.CacheWrite)*e.CacheWrite +
 		float64(u.CacheWrite1h)*e.write1hRate()
 	return Micro(math.Round(f))
+}
+
+// readRate: models with no cached-input price (OpenAI "pro" models) bill cached
+// tokens as ordinary input. A missing rate must never make tokens free.
+func (e Entry) readRate() float64 {
+	if e.CacheRead > 0 {
+		return e.CacheRead
+	}
+	return e.Input
 }
 
 // MaxCost is the worst case for a call: all input at the highest input rate, full max output.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	_ "modernc.org/sqlite"
 )
 
@@ -49,6 +50,11 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	}
 	for _, c := range []string{"cache_write_1h INTEGER NOT NULL DEFAULT 0", "estimated INTEGER NOT NULL DEFAULT 0"} {
 		db.Exec("ALTER TABLE calls ADD COLUMN " + c)
+	}
+	db.Exec("ALTER TABLE runs ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE forecasts ADD COLUMN p10_micro INTEGER NOT NULL DEFAULT 0")
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value INTEGER)`); err != nil {
+		return nil, err
 	}
 	return &Ledger{db}, nil
 }
@@ -190,9 +196,9 @@ func (l *Ledger) CallCosts(run string) ([]int64, error) {
 }
 
 // SaveForecast keeps every forecast shown, so accuracy can be scored when the run ends.
-func (l *Ledger) SaveForecast(run string, spent, p50, p90 int64, conf string, done, total int) error {
-	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p50_micro,p90_micro,confidence,steps_done,steps_total) VALUES(?,?,?,?,?,?,?,?)`,
-		run, time.Now().Unix(), spent, p50, p90, conf, done, total)
+func (l *Ledger) SaveForecast(run string, spent int64, f forecast.Forecast, done, total int) error {
+	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p10_micro,p50_micro,p90_micro,confidence,steps_done,steps_total) VALUES(?,?,?,?,?,?,?,?,?)`,
+		run, time.Now().Unix(), spent, f.P10, f.P50, f.P90, f.Confidence, done, total)
 	return err
 }
 
@@ -254,22 +260,24 @@ func (l *Ledger) EndRun(id string) (outcome string, err error) {
 }
 
 type AccRun struct {
-	ID                string
-	AtSpent, P90, Rem int64 // spent when forecast was made, forecast p90, actual cost after that point
-	Hit               bool
+	ID                          string
+	AtSpent, P10, P50, P90, Rem int64 // spent when forecast was made, its range, actual cost after that point
+	Hit                         bool  // P10 <= Rem <= P90
+	Under, Over                 bool  // missed: cost below the range, or above it
 }
 
 type Accuracy struct {
 	Scored, Hits int
+	Under, Over  int // misses by direction, so a range that is always off one way is visible
 	Runs         []AccRun
 }
 
 // MinScored is how many finished runs are needed before the score is shown.
-const MinScored = 5
+const MinScored = forecast.MinRuns
 
 // Accuracy scores finished runs: the earliest medium-confidence forecast (3+ steps done)
-// is a hit when the cost actually spent after it is within its p90. One-sided: it checks
-// the upper bound only.
+// is right when the cost actually spent after it lands inside the range it showed
+// (P10 to P90). Two-sided: a forecast far too high is a miss too.
 func (l *Ledger) Accuracy() (Accuracy, error) {
 	rows, err := l.db.Query(`SELECT id FROM runs WHERE outcome='finished' ORDER BY ended`)
 	if err != nil {
@@ -284,19 +292,46 @@ func (l *Ledger) Accuracy() (Accuracy, error) {
 	rows.Close()
 	var a Accuracy
 	for _, id := range ids {
-		var at, p90 int64
-		if l.db.QueryRow(`SELECT spent_micro,p90_micro FROM forecasts WHERE run_id=? AND confidence='medium' ORDER BY id LIMIT 1`, id).Scan(&at, &p90) != nil {
+		var r AccRun
+		if l.db.QueryRow(`SELECT spent_micro,COALESCE(p10_micro,0),p50_micro,p90_micro FROM forecasts WHERE run_id=? AND confidence='medium' ORDER BY id LIMIT 1`, id).
+			Scan(&r.AtSpent, &r.P10, &r.P50, &r.P90) != nil {
 			continue // never forecast with enough steps: not scoreable
 		}
+		if r.P10 == 0 {
+			r.P10 = r.P50 / 2 // saved before ranges had a lower end: the old default band
+		}
 		final, _ := l.SpentRun(id)
-		r := AccRun{ID: id, AtSpent: at, P90: p90, Rem: final - at, Hit: final-at <= p90}
+		r.ID, r.Rem = id, final-r.AtSpent
+		r.Under, r.Over = r.Rem < r.P10, r.Rem > r.P90
+		r.Hit = !r.Under && !r.Over
 		a.Scored++
-		if r.Hit {
+		switch {
+		case r.Hit:
 			a.Hits++
+		case r.Under:
+			a.Under++
+		default:
+			a.Over++
 		}
 		a.Runs = append(a.Runs, r)
 	}
 	return a, nil
+}
+
+// Band is the forecast range calibrated from this machine's finished runs
+// (the default band until MinScored runs are scored).
+func (l *Ledger) Band() forecast.Band {
+	a, err := l.Accuracy()
+	if err != nil {
+		return forecast.DefaultBand
+	}
+	var ratios []float64
+	for _, r := range a.Runs {
+		if r.P50 > 0 {
+			ratios = append(ratios, float64(r.Rem)/float64(r.P50))
+		}
+	}
+	return forecast.Calibrate(ratios)
 }
 
 // RunBudget is a budget a human raised for this run; false means use the default cap.
@@ -314,4 +349,39 @@ func (l *Ledger) SetRunBudget(run string, micro int64) error {
 	}
 	_, err := l.db.Exec(`UPDATE runs SET budget_micro=? WHERE id=?`, micro, run)
 	return err
+}
+
+// SetStopped marks a run stopped by a human answer or a timeout. The proxy refuses
+// its calls until `pitstop resume` clears it, so a late "yes" can't restart spending.
+func (l *Ledger) SetStopped(run string, stopped bool) error {
+	if _, err := l.db.Exec(`INSERT OR IGNORE INTO runs(id,started) VALUES(?,?)`, run, time.Now().Unix()); err != nil {
+		return err
+	}
+	_, err := l.db.Exec(`UPDATE runs SET stopped=? WHERE id=?`, stopped, run)
+	return err
+}
+
+// Stopped reports whether a run is stopped. A read error counts as stopped (fail closed).
+func (l *Ledger) Stopped(run string) (bool, error) {
+	var s int
+	err := l.db.QueryRow(`SELECT COALESCE(stopped,0) FROM runs WHERE id=?`, run).Scan(&s)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return s == 1 || err != nil, err
+}
+
+// SetSetting stores an integer setting, e.g. the caps `pitstop serve` runs with.
+func (l *Ledger) SetSetting(key string, v int64) error {
+	_, err := l.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, v)
+	return err
+}
+
+// Setting returns a stored integer setting.
+func (l *Ledger) Setting(key string) (int64, bool) {
+	var v int64
+	if l.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v) != nil {
+		return 0, false
+	}
+	return v, true
 }

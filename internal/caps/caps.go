@@ -4,6 +4,7 @@ package caps
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -89,9 +90,16 @@ func (g *Guard) Release(run string, amt int64) {
 	g.total -= amt
 }
 
+// Untagged prefixes the daily run that collects calls with no run identity.
+// It has no run cap: only the day and month caps apply.
+const Untagged = "untagged-"
+
 func (g *Guard) runCapLocked(run string) int64 {
 	if c, ok := g.S.RunBudget(run); ok {
 		return c
+	}
+	if strings.HasPrefix(run, Untagged) {
+		return 0
 	}
 	return g.L.Run
 }

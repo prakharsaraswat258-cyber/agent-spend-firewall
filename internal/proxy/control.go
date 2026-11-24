@@ -28,7 +28,7 @@ func (p *Proxy) Control(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing X-Pitstop header", http.StatusForbidden)
 		return
 	}
-	if p.Decider == nil && !strings.HasSuffix(r.URL.Path, "/overview") && !strings.HasSuffix(r.URL.Path, "/calls") {
+	if p.Decider == nil && !strings.HasSuffix(r.URL.Path, "/overview") && !strings.HasSuffix(r.URL.Path, "/calls") && !strings.HasSuffix(r.URL.Path, "/gate") {
 		http.Error(w, "decision cards are off", http.StatusNotFound)
 		return
 	}
@@ -38,6 +38,17 @@ func (p *Proxy) Control(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/calls"):
 		cs, _ := p.Ledger.Calls(r.URL.Query().Get("run"), 100)
 		json.NewEncoder(w).Encode(cs)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/gate"):
+		// Called by `pitstop hook pre-tool`; may wait for a human answer (up to the pause timeout).
+		var g struct {
+			Run string `json:"run"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&g) != nil || g.Run == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		msg := p.Gate(g.Run)
+		json.NewEncoder(w).Encode(map[string]any{"allow": msg == "", "message": msg})
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pending"):
 		json.NewEncoder(w).Encode(p.Decider.Pending())
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/answer"):
@@ -80,7 +91,7 @@ func Dashboard(w http.ResponseWriter, r *http.Request) {
 
 type runView struct {
 	ID, Repo, Branch, Agent, Status string
-	Spent, Budget, P50, P90         int64
+	Spent, Budget, P10, P50, P90    int64
 	Done, Total, Calls, Loops       int
 	Confidence                      string
 }
@@ -114,8 +125,8 @@ func (p *Proxy) overview(w http.ResponseWriter) {
 		}
 		if r.StepsTotal > 0 {
 			costs, _ := p.Ledger.CallCosts(r.ID)
-			f := forecast.Compute(r.CostMicro, costs, r.StepsDone, r.StepsTotal)
-			v.P50, v.P90, v.Confidence = f.P50, f.P90, f.Confidence
+			f := forecast.ComputeWith(p.band(), r.CostMicro, costs, r.StepsDone, r.StepsTotal)
+			v.P10, v.P50, v.P90, v.Confidence = f.P10, f.P50, f.P90, f.Confidence
 		}
 		views = append(views, v)
 	}

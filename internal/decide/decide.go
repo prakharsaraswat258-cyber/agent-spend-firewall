@@ -15,7 +15,7 @@ type Card struct {
 	Reason     string // "forecast" or "cap"
 	Spent      int64
 	Budget     int64
-	P50, P90   int64 // still to spend; zero when there is no plan
+	P10, P50, P90 int64 // still to spend; the range shown is P10-P90; zero when there is no plan
 	Offer      int64 // suggested budget raise
 	Confidence string
 	Done       int

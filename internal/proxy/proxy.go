@@ -36,14 +36,35 @@ type Proxy struct {
 	Guard      *caps.Guard
 	Anthropic  *url.URL
 	OpenAI     *url.URL
-	DefaultRun string
+	DefaultRun string          // run for calls with no run id; "" = per Claude Code session, else untagged
 	Decider    *decide.Decider // nil: no pause card, caps block with 403
 
 	mu     sync.Mutex
 	broken error // set when a ledger write failed: every metered call is blocked until restart
+	bandAt time.Time
+	bandV  forecast.Band
+}
+
+// band is the calibrated forecast range, recomputed at most once a minute.
+func (p *Proxy) band() forecast.Band {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if time.Since(p.bandAt) > time.Minute {
+		p.bandV, p.bandAt = p.Ledger.Band(), time.Now()
+	}
+	return p.bandV
 }
 
 var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
+
+// SessionRun names the run for a Claude Code session that was not started with
+// `pitstop run`, so each session gets its own run and run budget.
+func SessionRun(sessionID string) string {
+	if len(sessionID) > 8 {
+		sessionID = sessionID[:8]
+	}
+	return "cc-" + sessionID
+}
 
 // save checkpoints the run's repo (best effort) and returns a line for the error message.
 func (p *Proxy) save(run, reason string) string {
@@ -101,25 +122,80 @@ func (p *Proxy) forecastCard(run string) (decide.Card, bool) {
 		return c, false
 	}
 	costs, _ := p.Ledger.CallCosts(run)
-	f := forecast.Compute(c.Spent, costs, r.StepsDone, r.StepsTotal)
+	f := forecast.ComputeWith(p.band(), c.Spent, costs, r.StepsDone, r.StepsTotal)
 	if !forecast.WillOverrun(c.Spent, c.Budget, f) {
 		return c, false
 	}
-	c.P50, c.P90, c.Confidence, c.Done, c.Total = f.P50, f.P90, f.Confidence, r.StepsDone, r.StepsTotal
+	c.P10, c.P50, c.P90, c.Confidence, c.Done, c.Total = f.P10, f.P50, f.P90, f.Confidence, r.StepsDone, r.StepsTotal
 	c.Offer = max(c.Spent+f.P90-c.Budget, 1) // raise budget enough to cover the p90 finish
 	return c, true
 }
 
-// ask pauses the call. nil means Continue (budget already raised); an error means stop.
+// StopError means a human chose Stop, or nobody answered in time. The run stays
+// stopped until `pitstop resume`, so a late "yes" cannot restart spending.
+type StopError struct{ msg string }
+
+func (e *StopError) Error() string { return e.msg }
+
+// ask pauses the call. nil means Continue (budget already raised); a *StopError means stop.
 func (p *Proxy) ask(run string, c decide.Card) error {
 	a := p.Decider.Ask(c)
 	if a.Continue {
 		return nil
 	}
 	if a.TimedOut {
-		return errors.New("no answer to the pause card in time: stopped (never auto-continues).")
+		return &StopError{"no answer to the pause card in time: stopped (never auto-continues)."}
 	}
-	return errors.New("you chose Stop.")
+	return &StopError{"you chose Stop."}
+}
+
+// refuse blocks a run's calls: a stopped run stays stopped, and admission errors
+// (caps, Stop answers) come back as one message with the checkpoint line.
+// It returns "" when the call may go ahead; need has then been reserved.
+func (p *Proxy) refuse(run string, need int64) string {
+	if stopped, err := p.Ledger.Stopped(run); stopped {
+		if err != nil {
+			return "Pitstop blocked this call: cannot read the run's state (" + err.Error() + ")."
+		}
+		return "Pitstop: this run was stopped. Work is saved; continue with: pitstop resume " + run
+	}
+	err := p.admit(run, need)
+	if err == nil {
+		return ""
+	}
+	var se *StopError
+	if errors.As(err, &se) {
+		if e := p.Ledger.SetStopped(run, true); e != nil {
+			log.Printf("pitstop: could not mark run %s stopped: %v", run, e)
+		}
+	}
+	return "Pitstop blocked this call: " + err.Error() + p.save(run, "stop")
+}
+
+// Gate is the safe-point check the PreToolUse hook calls before each tool use.
+// It pauses on a decision card when the next call would not fit, or the forecast
+// says the run won't finish in budget; "" means go ahead.
+func (p *Proxy) Gate(run string) string {
+	need := p.nextCallEstimate(run)
+	msg := p.refuse(run, need)
+	if msg == "" {
+		p.Guard.Release(run, need) // a check only: the model call reserves for itself
+	}
+	return msg
+}
+
+// nextCallEstimate: the next call likely costs about what the last few did.
+func (p *Proxy) nextCallEstimate(run string) int64 {
+	costs, _ := p.Ledger.CallCosts(run)
+	if len(costs) == 0 {
+		return 1
+	}
+	tail := costs[max(0, len(costs)-3):]
+	var sum int64
+	for _, c := range tail {
+		sum += c
+	}
+	return max(sum/int64(len(tail)), 1)
 }
 
 // Respond answers a pending card. Continue raises the run budget by add.
@@ -149,8 +225,8 @@ func (p *Proxy) trackProgress(run string, body []byte) {
 	}
 	spent, _ := p.Ledger.SpentRun(run)
 	costs, _ := p.Ledger.CallCosts(run)
-	if f := forecast.Compute(spent, costs, pr.Done, pr.Total); f.HasPlan {
-		_ = p.Ledger.SaveForecast(run, spent, f.P50, f.P90, f.Confidence, pr.Done, pr.Total)
+	if f := forecast.ComputeWith(p.band(), spent, costs, pr.Done, pr.Total); f.HasPlan {
+		_ = p.Ledger.SaveForecast(run, spent, f, pr.Done, pr.Total)
 	}
 }
 
@@ -228,9 +304,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	maxOut := firstPositive(req.MaxTokens, req.MaxComp, req.MaxOut, defaultMaxOutput)
-	// bytes/3 over-counts tokens: safe upper bound for reservation.
-	need := entry.MaxCost(int64(len(body))/3+1, maxOut)
+	// High-side estimate: text bytes/3, plus a fixed allowance per image and PDF page.
+	need := entry.MaxCost(estimateInputTokens(body), maxOut)
 
+	// Only metadata.user_id: a session id quoted in the conversation must not win.
+	session := ""
+	if m := sessionRe.FindStringSubmatch(req.Metadata.UserID); provider == "anthropic" && m != nil {
+		session = m[1]
+	}
 	run := runID
 	if run == "" {
 		run = r.Header.Get("X-Pitstop-Run")
@@ -238,11 +319,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if run == "" {
 		run = p.DefaultRun
 	}
-	if provider == "anthropic" && runID != "" {
-		// Only metadata.user_id: a session id quoted in the conversation must not win.
-		if m := sessionRe.FindStringSubmatch(req.Metadata.UserID); m != nil {
-			_ = p.Ledger.SetSession(run, m[1]) // lets resume reopen the same Claude Code session
-		}
+	switch {
+	case run != "":
+	case session != "":
+		run = SessionRun(session) // one run per Claude Code session, with its own run budget
+	default:
+		// No run identity at all (scripts, SDKs): day and month caps only, no run cap,
+		// so a whole day of untagged calls is not squeezed into one run budget.
+		run = caps.Untagged + time.Now().Format("20060102")
+	}
+	if session != "" && runID != "" {
+		_ = p.Ledger.SetSession(run, session) // lets resume reopen the same Claude Code session
 	}
 	if provider == "anthropic" {
 		p.trackProgress(run, body)
@@ -260,8 +347,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := p.admit(run, need); err != nil {
-		fail(w, provider, 403, "Pitstop blocked this call: "+err.Error()+p.save(run, "stop"))
+	if msg := p.refuse(run, need); msg != "" {
+		fail(w, provider, 403, msg)
 		return
 	}
 	defer p.Guard.Release(run, need)

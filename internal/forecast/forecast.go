@@ -2,16 +2,33 @@
 // remaining ~ steps left x average cost per step so far x context-growth factor.
 package forecast
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 type Forecast struct {
-	HasPlan    bool
-	P50, P90   int64  // micro-dollars still to spend
-	Confidence string // "low" until 3 steps are done, then "medium"
+	HasPlan       bool
+	P10, P50, P90 int64  // micro-dollars still to spend; shown as the range P10-P90
+	Confidence    string // "low" until 3 steps are done, then "medium"
 }
 
-// Compute: costs are per-call costs in order; done/total are plan steps.
+// Band turns the p50 into the shown range: P10 = Lo x P50, P90 = Hi x P50.
+type Band struct{ Lo, Hi float64 }
+
+// DefaultBand is used until enough finished runs exist to calibrate from.
+var DefaultBand = Band{Lo: 0.5, Hi: 2}
+
+// MinRuns is how many scored runs Calibrate needs before it trusts history.
+const MinRuns = 5
+
+// Compute uses the default band. costs are per-call costs in order; done/total are plan steps.
 func Compute(spent int64, costs []int64, done, total int) Forecast {
+	return ComputeWith(DefaultBand, spent, costs, done, total)
+}
+
+// ComputeWith forecasts with a calibrated band.
+func ComputeWith(b Band, spent int64, costs []int64, done, total int) Forecast {
 	if total <= 0 || done < 0 || done > total {
 		return Forecast{Confidence: "low"}
 	}
@@ -26,8 +43,26 @@ func Compute(spent int64, costs []int64, done, total int) Forecast {
 	} else {
 		f.P50 = int64(math.Round(float64(left) * float64(spent) / float64(done) * growth(costs)))
 	}
-	f.P90 = 2 * f.P50 // until there is history to calibrate against
+	f.P10 = int64(math.Round(b.Lo * float64(f.P50)))
+	f.P90 = int64(math.Round(b.Hi * float64(f.P50)))
 	return f
+}
+
+// Calibrate sets the band from past finished runs. ratios are actual cost to
+// finish divided by the p50 forecast at the scoring point. The band is the 10th
+// to 90th percentile of those ratios, so about 8 in 10 runs land inside it.
+// Clamped so a few odd runs can't produce a useless or collapsed range.
+func Calibrate(ratios []float64) Band {
+	if len(ratios) < MinRuns {
+		return DefaultBand
+	}
+	r := append([]float64(nil), ratios...)
+	sort.Float64s(r)
+	q := func(p float64) float64 { return r[int(math.Round(p*float64(len(r)-1)))] }
+	return Band{
+		Lo: math.Min(0.9, math.Max(0.2, q(0.1))),
+		Hi: math.Min(5, math.Max(1.1, q(0.9))),
+	}
 }
 
 // growth: later calls cost more as context grows. Ratio of the last 5 calls'

@@ -49,7 +49,7 @@ async function tick(){
     const b=el('div','banner');
     b.append(el('b','','Needs your decision: '+c.Run));
     b.append(el('p','',c.Reason==='cap'?'Budget reached: '+usd(c.Spent)+' of '+usd(c.Budget)+' used.':
-      c.Done+' of '+c.Total+' steps done, '+usd(c.Spent)+' of '+usd(c.Budget)+' used. Likely '+usd(c.P50)+' to '+usd(c.P90)+' more ('+c.Confidence+' confidence).'));
+      c.Done+' of '+c.Total+' steps done, '+usd(c.Spent)+' of '+usd(c.Budget)+' used. Likely '+usd(c.P10)+' to '+usd(c.P90)+' more ('+c.Confidence+' confidence).'));
     const g=el('button','go','Continue +'+usd(c.Offer));g.onclick=()=>answer(c.ID,true,c.Offer);
     const x=el('button','','Stop & save');x.onclick=()=>answer(c.ID,false,0);
     b.append(g,document.createTextNode(' '),x);cs.append(b)}
@@ -61,7 +61,7 @@ async function tick(){
     const st=el('td');st.append(r.Total?document.createTextNode(r.Done+'/'+r.Total+' '):el('span','mute','no plan'));if(r.Total)st.append(bar(r.Done/r.Total,''));tr.append(st);
     const m=el('td');m.append(document.createTextNode(usd(r.Spent)+(r.Budget?' / '+usd(r.Budget):'')));
     if(r.Budget){const f=r.Spent/r.Budget;m.append(bar(f,f>=1?'bad':f>=.7?'warn':''))}tr.append(m);
-    tr.append(el('td','hide',r.Total?usd(r.P50)+'–'+usd(r.P90):'–'));
+    tr.append(el('td','hide',r.Total?usd(r.P10)+'–'+usd(r.P90):'–'));
     const sc=el('td');sc.append(el('span','chip '+(r.Status==='needs you'?'needs':r.Status),r.Status));tr.append(sc);tb.append(tr);
     if(open===r.ID){
       const d=el('tr','detail'),td=el('td');td.colSpan=6;

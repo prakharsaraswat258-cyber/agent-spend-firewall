@@ -37,6 +37,8 @@ func main() {
 		os.Exit(resumeCmd(cfg, os.Args[2:]))
 	case "status":
 		os.Exit(statusCmd(cfg, os.Args[2:]))
+	case "hook":
+		os.Exit(hookCmd(cfg, os.Args[2:]))
 	case "decide":
 		os.Exit(decideCmd(cfg))
 	case "accuracy":
@@ -81,8 +83,13 @@ func serve(cfg Config) {
 	a, _ := url.Parse("https://api.anthropic.com")
 	o, _ := url.Parse("https://api.openai.com")
 	p := &proxy.Proxy{Prices: tb, Ledger: l, Anthropic: a, OpenAI: o,
-		Guard:      caps.New(caps.Limits{Run: m(*runCap), Day: m(*dayCap), Month: m(*monthCap)}, l),
-		DefaultRun: "session-" + time.Now().Format("20060102-150405")}
+		Guard: caps.New(caps.Limits{Run: m(*runCap), Day: m(*dayCap), Month: m(*monthCap)}, l)}
+	// Saved so `pitstop status` and other commands show the caps actually in force.
+	for k, v := range map[string]int64{"run_cap": m(*runCap), "day_cap": m(*dayCap), "month_cap": m(*monthCap)} {
+		if err := l.SetSetting(k, v); err != nil {
+			log.Fatal(err)
+		}
+	}
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	dec := decide.New(*to)
 	dec.Notify = func(c decide.Card) { desktopNotify(cfg, c, *to) }

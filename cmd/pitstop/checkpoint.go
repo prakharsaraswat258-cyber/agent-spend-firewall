@@ -48,9 +48,12 @@ func resumeCmd(cfg Config, args []string) int {
 	}
 	r, err := l.GetRun(args[0])
 	br, _ := l.LastCheckpoint(args[0])
+	if err == nil {
+		err = l.SetStopped(r.ID, false) // resuming is the human's yes to continue this run
+	}
 	l.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run %q not found\n", args[0])
+		fmt.Fprintf(os.Stderr, "run %q not found or not resumable: %v\n", args[0], err)
 		return 1
 	}
 	if br != "" {

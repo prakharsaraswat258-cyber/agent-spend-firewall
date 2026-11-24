@@ -61,7 +61,7 @@ func runCmd(cfg Config, args []string) int {
 	cwd, _ := os.Getwd()
 	repo, branch, top := detect(cwd)
 	id := newID()
-	if err := l.StartRun(ledger.Run{ID: id, Repo: repo, Branch: branch, Agent: filepath.Base(args[0]), Dir: top, Started: time.Now()}); err != nil {
+	if err := l.StartRun(ledger.Run{ID: id, Repo: repo, Branch: branch, Agent: agentName(args[0]), Dir: top, Started: time.Now()}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -70,13 +70,26 @@ func runCmd(cfg Config, args []string) int {
 	return launch(cfg, id, "", args)
 }
 
+// agentName: "claude" for claude, claude.exe, /usr/bin/claude.
+func agentName(cmd string) string {
+	return strings.TrimSuffix(strings.ToLower(filepath.Base(cmd)), ".exe")
+}
+
 // launch runs cmd with the proxy env for run id, in dir (or here when empty).
 func launch(cfg Config, id, dir string, args []string) int {
 	base := "http://" + cfg.Addr + "/run/" + id
+	if agentName(args[0]) == "claude" {
+		// Pause at a safe point (before a tool call) instead of holding an HTTP request.
+		if path, err := claudeHookSettings(); err == nil {
+			args = append([]string{args[0], "--settings", path}, args[1:]...)
+		} else {
+			fmt.Fprintf(os.Stderr, "pitstop: could not install the pause hook (%v); pauses fall back to holding the request\n", err)
+		}
+	}
 	c := exec.Command(args[0], args[1:]...)
 	c.Dir = dir
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	c.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+base, "OPENAI_BASE_URL="+base+"/v1")
+	c.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+base, "OPENAI_BASE_URL="+base+"/v1", "PITSTOP_RUN="+id)
 	// Claude Code turns its task list off on models newer than Opus 4.7 / Sonnet 4.6 / Haiku 4.5.
 	// Without it Pitstop sees no plan and cannot forecast. Child process only; the user's own value wins.
 	if _, set := os.LookupEnv("CLAUDE_CODE_ENABLE_TODO_TOOLS"); !set {
@@ -108,10 +121,13 @@ func summary(cfg Config, id string) {
 	if acc, _ := l.Accuracy(); true {
 		for _, r := range acc.Runs {
 			if r.ID == id {
-				if r.Hit {
-					line += fmt.Sprintf(", forecast right (finish cost %s within p90 %s)", usd(r.Rem), usd(r.P90))
-				} else {
-					line += fmt.Sprintf(", forecast WRONG (finish cost %s above p90 %s)", usd(r.Rem), usd(r.P90))
+				switch {
+				case r.Hit:
+					line += fmt.Sprintf(", forecast right (cost to finish %s, range was %s-%s)", usd(r.Rem), usd(r.P10), usd(r.P90))
+				case r.Under:
+					line += fmt.Sprintf(", forecast WRONG: too high (cost to finish %s, range was %s-%s)", usd(r.Rem), usd(r.P10), usd(r.P90))
+				default:
+					line += fmt.Sprintf(", forecast WRONG: too low (cost to finish %s, range was %s-%s)", usd(r.Rem), usd(r.P10), usd(r.P90))
 				}
 			}
 		}
@@ -137,14 +153,14 @@ func accuracyCmd(cfg Config) int {
 	if a.Scored < ledger.MinScored {
 		fmt.Printf("accuracy appears after %d finished runs with a forecast (have %d)\n", ledger.MinScored, a.Scored)
 	} else {
-		fmt.Printf("forecast right %d of %d finished runs (p90 upper bound)\n", a.Hits, a.Scored)
+		fmt.Printf("forecast range right %d of %d finished runs (misses: %d too high, %d too low)\n", a.Hits, a.Scored, a.Under, a.Over)
 	}
 	for _, r := range a.Runs {
 		v := "right"
 		if !r.Hit {
 			v = "WRONG"
 		}
-		fmt.Printf("  %-20s forecast p90 %s, actual %s: %s\n", r.ID, usd(r.P90), usd(r.Rem), v)
+		fmt.Printf("  %-20s forecast %s-%s, actual %s: %s\n", r.ID, usd(r.P10), usd(r.P90), usd(r.Rem), v)
 	}
 	return 0
 }
