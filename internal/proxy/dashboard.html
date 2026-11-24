@@ -43,6 +43,7 @@ async function tick(){
   const s=document.getElementById('strip');s.replaceChildren();
   for(const [l,v,c] of [['Today',o.day,o.dayCap],['This month',o.month,o.monthCap]]){
     const d=el('div');d.append(el('b','',usd(v)+(c?' / '+usd(c):'')),el('span','mute',l));s.append(d)}
+  {const d=el('div');d.append(el('b','',o.accScored>=o.accMin?o.accHits+' of '+o.accScored:'–'),el('span','mute',o.accScored>=o.accMin?'forecasts right':'forecast accuracy after '+o.accMin+' finished runs'));s.append(d)}
   const cs=document.getElementById('cards');cs.replaceChildren();
   for(const c of o.cards||[]){
     const b=el('div','banner');

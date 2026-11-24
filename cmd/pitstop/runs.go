@@ -77,12 +77,69 @@ func launch(cfg Config, id, dir string, args []string) int {
 	c.Dir = dir
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	c.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+base, "OPENAI_BASE_URL="+base+"/v1")
+	code := 0
 	if err := c.Run(); err != nil {
+		code = 127
 		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode()
+			code = ee.ExitCode()
+		} else {
+			fmt.Fprintln(os.Stderr, err)
 		}
+	}
+	summary(cfg, id)
+	return code
+}
+
+// summary closes the run and prints total cost, whether the forecast held, and loop alerts.
+func summary(cfg Config, id string) {
+	l, err := ledger.Open(cfg.DB)
+	if err != nil {
+		return
+	}
+	defer l.Close()
+	outcome, _ := l.EndRun(id)
+	spent, _ := l.SpentRun(id)
+	line := fmt.Sprintf("pitstop: run %s %s, total %s", id, outcome, usd(spent))
+	if acc, _ := l.Accuracy(); true {
+		for _, r := range acc.Runs {
+			if r.ID == id {
+				if r.Hit {
+					line += fmt.Sprintf(", forecast right (finish cost %s within p90 %s)", usd(r.Rem), usd(r.P90))
+				} else {
+					line += fmt.Sprintf(", forecast WRONG (finish cost %s above p90 %s)", usd(r.Rem), usd(r.P90))
+				}
+			}
+		}
+	}
+	if rs, _ := l.Runs(50); true {
+		for _, r := range rs {
+			if r.ID == id && r.Loops > 0 {
+				line += fmt.Sprintf(", %d loop alerts", r.Loops)
+			}
+		}
+	}
+	fmt.Fprintln(os.Stderr, line)
+}
+
+func accuracyCmd(cfg Config) int {
+	l, err := ledger.Open(cfg.DB)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return 127
+		return 1
+	}
+	defer l.Close()
+	a, _ := l.Accuracy()
+	if a.Scored < ledger.MinScored {
+		fmt.Printf("accuracy appears after %d finished runs with a forecast (have %d)\n", ledger.MinScored, a.Scored)
+	} else {
+		fmt.Printf("forecast right %d of %d finished runs (p90 upper bound)\n", a.Hits, a.Scored)
+	}
+	for _, r := range a.Runs {
+		v := "right"
+		if !r.Hit {
+			v = "WRONG"
+		}
+		fmt.Printf("  %-20s forecast p90 %s, actual %s: %s\n", r.ID, usd(r.P90), usd(r.Rem), v)
 	}
 	return 0
 }

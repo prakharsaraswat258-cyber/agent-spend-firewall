@@ -25,7 +25,7 @@ func Open(path string) (*Ledger, error) {
 	}
 	db.SetMaxOpenConns(1) // sqlite: one writer
 	_, err = db.Exec(`
-CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT, dir TEXT, session_id TEXT, steps_done INTEGER, steps_total INTEGER);
+CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, started INTEGER, budget_micro INTEGER, repo TEXT, branch TEXT, agent TEXT, dir TEXT, session_id TEXT, steps_done INTEGER, steps_total INTEGER, ended INTEGER, outcome TEXT);
 CREATE TABLE IF NOT EXISTS forecasts(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, spent_micro INTEGER, p50_micro INTEGER, p90_micro INTEGER, confidence TEXT, steps_done INTEGER, steps_total INTEGER);
 CREATE TABLE IF NOT EXISTS checkpoints(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, branch TEXT, commit_sha TEXT, reason TEXT);
 CREATE TABLE IF NOT EXISTS calls(
@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 		return nil, err
 	}
 	// Older ledgers lack newer run columns; duplicate-column errors are expected and ignored.
-	for _, c := range []string{"repo TEXT", "branch TEXT", "agent TEXT", "dir TEXT", "session_id TEXT", "steps_done INTEGER", "steps_total INTEGER"} {
+	for _, c := range []string{"repo TEXT", "branch TEXT", "agent TEXT", "dir TEXT", "session_id TEXT", "steps_done INTEGER", "steps_total INTEGER", "ended INTEGER", "outcome TEXT"} {
 		db.Exec("ALTER TABLE runs ADD COLUMN " + c)
 	}
 	return &Ledger{db}, nil
@@ -224,4 +224,68 @@ func (l *Ledger) Calls(run string, limit int) ([]CallRow, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// EndRun marks a run over. Outcome: "finished" (plan complete), "stopped" (plan incomplete), "ended" (no plan seen).
+func (l *Ledger) EndRun(id string) (outcome string, err error) {
+	r, err := l.GetRun(id)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case r.StepsTotal == 0:
+		outcome = "ended"
+	case r.StepsDone >= r.StepsTotal:
+		outcome = "finished"
+	default:
+		outcome = "stopped"
+	}
+	_, err = l.db.Exec(`UPDATE runs SET ended=?, outcome=? WHERE id=?`, time.Now().Unix(), outcome, id)
+	return outcome, err
+}
+
+type AccRun struct {
+	ID                string
+	AtSpent, P90, Rem int64 // spent when forecast was made, forecast p90, actual cost after that point
+	Hit               bool
+}
+
+type Accuracy struct {
+	Scored, Hits int
+	Runs         []AccRun
+}
+
+// MinScored is how many finished runs are needed before the score is shown.
+const MinScored = 5
+
+// Accuracy scores finished runs: the earliest medium-confidence forecast (3+ steps done)
+// is a hit when the cost actually spent after it is within its p90. One-sided: it checks
+// the upper bound only.
+func (l *Ledger) Accuracy() (Accuracy, error) {
+	rows, err := l.db.Query(`SELECT id FROM runs WHERE outcome='finished' ORDER BY ended`)
+	if err != nil {
+		return Accuracy{}, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	rows.Close()
+	var a Accuracy
+	for _, id := range ids {
+		var at, p90 int64
+		if l.db.QueryRow(`SELECT spent_micro,p90_micro FROM forecasts WHERE run_id=? AND confidence='medium' ORDER BY id LIMIT 1`, id).Scan(&at, &p90) != nil {
+			continue // never forecast with enough steps: not scoreable
+		}
+		final, _ := l.SpentRun(id)
+		r := AccRun{ID: id, AtSpent: at, P90: p90, Rem: final - at, Hit: final-at <= p90}
+		a.Scored++
+		if r.Hit {
+			a.Hits++
+		}
+		a.Runs = append(a.Runs, r)
+	}
+	return a, nil
 }

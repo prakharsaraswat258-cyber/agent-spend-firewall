@@ -6,6 +6,7 @@ import (
 
 	"encoding/json"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"net"
 	"net/http"
 	"strings"
@@ -96,6 +97,7 @@ func (p *Proxy) overview(w http.ResponseWriter) {
 			cards = append(cards, c)
 		}
 	}
+	acc, _ := p.Ledger.Accuracy()
 	rs, _ := p.Ledger.Runs(50)
 	var views []runView
 	for _, r := range rs {
@@ -117,5 +119,5 @@ func (p *Proxy) overview(w http.ResponseWriter) {
 		}
 		views = append(views, v)
 	}
-	json.NewEncoder(w).Encode(map[string]any{"day": day, "month": month, "dayCap": p.Guard.L.Day, "monthCap": p.Guard.L.Month, "cards": cards, "runs": views})
+	json.NewEncoder(w).Encode(map[string]any{"day": day, "month": month, "dayCap": p.Guard.L.Day, "monthCap": p.Guard.L.Month, "accHits": acc.Hits, "accScored": acc.Scored, "accMin": ledger.MinScored, "cards": cards, "runs": views})
 }

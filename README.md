@@ -33,7 +33,9 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.
 
-Not yet: "no code change in N steps" signal, Telegram/phone channel, forecast accuracy score, per-repo budgets, Codex hook check.
+Not yet: "no code change in N steps" signal, Telegram/phone channel, per-repo budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.
 
 - Dashboard: http://127.0.0.1:4546/dashboard (same port as the proxy). Today/month spend, waiting decision cards with Continue/Stop buttons, runs with step and money bars, click a run for its calls. Static page, no external requests; data comes from `/pitstop/*` with the guard header.
+
+- Accuracy score: `pitstop run` closes the run when the agent exits (finished = plan complete, stopped = plan incomplete, ended = no plan) and prints total cost, whether the forecast held, and loop alerts. `pitstop accuracy` and the dashboard show "right N of M" once 5 finished runs have a forecast. A forecast counts as right when the cost actually spent after the earliest medium-confidence forecast (3+ steps done) is within its p90. Upper bound only: a forecast far too high still counts as right.

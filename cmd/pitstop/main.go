@@ -39,10 +39,12 @@ func main() {
 		os.Exit(statusCmd(cfg, os.Args[2:]))
 	case "decide":
 		os.Exit(decideCmd(cfg))
+	case "accuracy":
+		os.Exit(accuracyCmd(cfg))
 	case "runs":
 		os.Exit(runsCmd(cfg))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide")
+		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide | accuracy")
 		os.Exit(2)
 	}
 }
