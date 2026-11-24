@@ -1,0 +1,11 @@
+{
+  "version": "2026-11-24",
+  "note": "USD per million tokens. VERIFY against provider pricing pages before trusting.",
+  "models": {
+    "claude-opus-4":     {"provider":"anthropic","input":15,  "output":75, "cache_read":1.5,  "cache_write":18.75},
+    "claude-sonnet-4":   {"provider":"anthropic","input":3,   "output":15, "cache_read":0.3,  "cache_write":3.75},
+    "claude-3-5-haiku":  {"provider":"anthropic","input":0.8, "output":4,  "cache_read":0.08, "cache_write":1},
+    "gpt-4o-mini":       {"provider":"openai","input":0.15,"output":0.6, "cache_read":0.075},
+    "gpt-4o":            {"provider":"openai","input":2.5, "output":10,  "cache_read":1.25}
+  }
+}
