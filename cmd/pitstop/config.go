@@ -12,6 +12,10 @@ type Config struct {
 	Addr      string  `json:"addr"`
 	DB        string  `json:"db"`
 	BudgetUSD float64 `json:"default_budget_usd"`
+	// PricesURL is where `pitstop prices update` reads the table (default: the project's GitHub).
+	PricesURL string `json:"prices_url,omitempty"`
+	// AutoPriceUpdate: serve checks for newer prices once a day unless this is false.
+	AutoPriceUpdate *bool `json:"auto_price_update,omitempty"`
 }
 
 func cfgPath() string {

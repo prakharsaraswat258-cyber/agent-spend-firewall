@@ -295,7 +295,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.brokenErr(); err != nil {
-		fail(w, provider, 503, "Pitstop blocked this call: its ledger could not be written ("+err.Error()+"), so spend is not being tracked. Fix: check free disk space and permissions on the ledger file, then restart pitstop serve.")
+		fail(w, provider, 503, "Pitstop blocked this call: its ledger could not be written ("+err.Error()+"), so spend is not being tracked. Fix: check free disk space and permissions on the ledger file, then restart pitstop serve. Run pitstop doctor to check.")
 		return
 	}
 	entry, err := p.Prices.Lookup(req.Model)
@@ -403,6 +403,9 @@ func (p *Proxy) setBroken(err error) {
 		p.broken = err
 	}
 }
+
+// Broken is the ledger write error that is blocking all calls, or nil (for /healthz and doctor).
+func (p *Proxy) Broken() error { return p.brokenErr() }
 
 func (p *Proxy) brokenErr() error {
 	p.mu.Lock()

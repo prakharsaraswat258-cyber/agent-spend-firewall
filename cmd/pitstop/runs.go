@@ -48,8 +48,13 @@ func runCmd(cfg Config, args []string) int {
 		return 2
 	}
 	resp, err := http.Get("http://" + cfg.Addr + "/healthz")
-	if err != nil || resp.StatusCode != 200 {
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "pitstop proxy not running at %s. Start it: pitstop serve\n", cfg.Addr)
+		return 1
+	}
+	if resp.StatusCode != 200 {
+		resp.Body.Close()
+		fmt.Fprintf(os.Stderr, "pitstop proxy at %s is blocking all calls. Run: pitstop doctor\n", cfg.Addr)
 		return 1
 	}
 	resp.Body.Close()

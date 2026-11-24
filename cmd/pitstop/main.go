@@ -40,6 +40,10 @@ func main() {
 		os.Exit(statusCmd(cfg, os.Args[2:]))
 	case "hook":
 		os.Exit(hookCmd(cfg, os.Args[2:]))
+	case "doctor":
+		os.Exit(doctorCmd(cfg))
+	case "prices":
+		os.Exit(pricesCmd(cfg, os.Args[2:]))
 	case "notify":
 		os.Exit(notifyCmd(cfg, os.Args[2:]))
 	case "decide":
@@ -49,7 +53,7 @@ func main() {
 	case "runs":
 		os.Exit(runsCmd(cfg))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide | accuracy | notify ...")
+		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide | accuracy | notify ... | prices ... | doctor")
 		os.Exit(2)
 	}
 }
@@ -65,7 +69,14 @@ func serve(cfg Config) {
 	to := fs.Duration("pause-timeout", 9*time.Minute, "no answer to a pause card in this time: stop and save (keep it under the SDK's 10 minute request timeout)")
 	fs.Parse(os.Args[2:])
 
-	tb := price.Default()
+	if err := os.MkdirAll(filepath.Dir(*db), 0o700); err != nil {
+		log.Fatal(err)
+	}
+	l, err := ledger.Open(*db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var tb *price.Table
 	if *prices != "" {
 		b, err := os.ReadFile(*prices)
 		if err == nil {
@@ -74,13 +85,18 @@ func serve(cfg Config) {
 		if err != nil {
 			log.Fatal(err)
 		}
+	} else {
+		autoUpdatePrices(cfg, l) // at most daily; never applies big price drops on its own
+		var warn []string
+		var source string
+		tb, source, warn = loadPrices()
+		for _, w := range warn {
+			log.Printf("pitstop: warning: %s", w)
+		}
+		log.Printf("pitstop: prices %s (%s)", tb.Version, source)
 	}
-	if err := os.MkdirAll(filepath.Dir(*db), 0o700); err != nil {
-		log.Fatal(err)
-	}
-	l, err := ledger.Open(*db)
-	if err != nil {
-		log.Fatal(err)
+	if tb.Stale(time.Now()) {
+		log.Printf("pitstop: warning: price table %s is over 30 days old. Run: pitstop prices update", tb.Version)
 	}
 	m := func(usd float64) int64 { return int64(usd * 1e6) }
 	a, _ := url.Parse("https://api.anthropic.com")
@@ -93,7 +109,13 @@ func serve(cfg Config) {
 			log.Fatal(err)
 		}
 	}
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if err := p.Broken(); err != nil {
+			http.Error(w, "ledger write failed: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte("ok"))
+	})
 	dec := decide.New(*to)
 	hub := setupNotify(context.Background(), cfg, *addr, l, dec, p, *to)
 	dec.Notify = hub.Card

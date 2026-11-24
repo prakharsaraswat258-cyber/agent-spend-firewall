@@ -51,9 +51,13 @@ func (e Entry) write1hRate() float64 {
 	return 0
 }
 
+// Load parses and validates a price table.
 func Load(b []byte) (*Table, error) {
 	t := &Table{}
 	if err := json.Unmarshal(b, t); err != nil {
+		return nil, err
+	}
+	if err := t.Validate(); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -81,7 +85,7 @@ func (t *Table) Lookup(model string) (Entry, error) {
 			return e, nil
 		}
 	}
-	return Entry{}, fmt.Errorf("unknown model %q: add it to prices.json (price table %s)", model, t.Version)
+	return Entry{}, fmt.Errorf("Pitstop has no price for model %q (price table %s), so the call is blocked. Fix: pitstop prices update, or add it yourself: pitstop prices add %s --input <USD per MTok> --output <USD per MTok>", model, t.Version, model)
 }
 
 // Cost: tokens * ($/Mtok) is exactly micro-dollars. Rounded once per call.
