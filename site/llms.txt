@@ -1,0 +1,18 @@
+# Pitstop
+
+> Open-source spend firewall for AI coding agents. A local proxy in front of the Anthropic and OpenAI APIs that meters every call's cost exactly, enforces per-run, daily and monthly caps, stops loops, and pauses a run on a decision card when the forecast says it won't fit the budget. Stopping saves the work to a WIP git branch.
+
+## Install
+
+- `go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest`
+- `pitstop init --budget 5`, then `pitstop serve`, then `pitstop run -- claude`
+
+## Links
+
+- [README](https://github.com/ShadowIzzHerZ/agent-spend-firewall#readme): commands, rules and limits
+- [Source](https://github.com/ShadowIzzHerZ/agent-spend-firewall): Apache-2.0
+- [Price table](https://github.com/ShadowIzzHerZ/agent-spend-firewall/blob/main/internal/price/prices.json): per-model USD per million tokens
+
+## Privacy
+
+API keys pass through and are never stored. Prompts and code are never stored. The local ledger keeps model, tokens, cost, time and tool names only.

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <script>document.documentElement.classList.remove('no-js')</script>
 </head>
 <body>
@@ -19,6 +19,7 @@
     <ul>
       <li class="hide"><a href="#chart">How it pauses</a></li>
       <li class="hide"><a href="#features">Features</a></li>
+      <li class="hide"><a href="#security">Privacy</a></li>
       <li class="hide"><a href="#pricing">Pricing</a></li>
       <li><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub</a></li>
       <li><a class="btn small" href="login.html">Sign in</a></li>
@@ -33,7 +34,15 @@
   <p class="lede rise">Pitstop pauses your AI agent before it overspends, shows how far along it is and what finishing will likely cost, then lets you continue or stop without losing work.</p>
   <div class="act rise">
     <a class="btn red" href="#start">Set a budget</a>
-    <code>go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest</code>
+    <a class="btn ghost" href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub<span id="stars"></span></a>
+  </div>
+  <div class="install rise" data-ui>
+    <div class="itabs" role="tablist" aria-label="Install">
+      <button role="tab" aria-selected="true" data-cmd="go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest">Go</button>
+      <button role="tab" aria-selected="false" data-cmd="git clone https://github.com/ShadowIzzHerZ/agent-spend-firewall &amp;&amp; cd agent-spend-firewall &amp;&amp; go build -o pitstop ./cmd/pitstop">From source</button>
+      <button role="tab" aria-selected="false" data-cmd="Install Pitstop for me: run `go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest`, then `pitstop init --budget 5` and start `pitstop serve` in the background. When it is running, tell me to restart you with `pitstop run -- claude`.">Ask your agent</button>
+    </div>
+    <div class="iline"><code id="icmd">go install github.com/ShadowIzzHerZ/agent-spend-firewall/cmd/pitstop@latest</code><button class="copy" id="icopy" type="button">Copy</button></div>
   </div>
   <div class="stage" aria-hidden="true"></div>
   <div class="term" data-ui aria-label="Terminal running Claude Code through Pitstop">
@@ -151,6 +160,48 @@
   </div>
 </section>
 
+<section class="facts" aria-label="Pitstop in numbers">
+  <div class="rise"><b>45</b><span>models priced from the providers' own pricing pages</span></div>
+  <div class="rise"><b>$0.000001</b><span>the smallest amount the meter counts</span></div>
+  <div class="rise"><b>5</b><span>repeats of the same call, and the loop is stopped</span></div>
+  <div class="rise"><b>9 min</b><span>without an answer, the run stops. It never continues on its own.</span></div>
+  <div class="rise"><b>0</b><span>prompts, code or keys written to disk</span></div>
+</section>
+
+<section class="section" id="security" aria-labelledby="sec-h">
+  <div class="sec">
+    <div class="l">
+      <h2 id="sec-h" class="rise">What Pitstop never keeps</h2>
+      <p class="rise">It sits between your agent and the provider, so it sees every call. It keeps only what it needs to count money.</p>
+      <ul class="rise">
+        <li>Your API key passes through to the provider and is never written down.</li>
+        <li>Prompts and code are forwarded, not stored. The ledger holds model, tokens, cost, time and tool names.</li>
+        <li>It listens on 127.0.0.1 only, and its control API refuses requests from web pages.</li>
+        <li>An Anthropic key only ever goes to Anthropic, and an OpenAI key only to OpenAI.</li>
+        <li>The whole thing is open source under Apache-2.0, so you can read every line.</li>
+      </ul>
+    </div>
+    <div class="r rise" data-ui aria-label="What passes through and what is stored">
+      <div class="pane">
+        <div class="ph">Request from claude</div>
+        <div class="kv"><span>x-api-key</span><b>sk-ant-&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</b></div>
+        <div class="kv"><span>model</span><b>claude-sonnet-4-5</b></div>
+        <div class="kv"><span>messages</span><b>42 turns, 61,204 tokens</b></div>
+        <div class="tag pass">forwarded to api.anthropic.com</div>
+      </div>
+      <div class="pane dark">
+        <div class="ph">Row written to ledger.db</div>
+        <div class="kv"><span>run</span><b>1124-2050</b></div>
+        <div class="kv"><span>model</span><b>claude-sonnet-4-5</b></div>
+        <div class="kv"><span>tokens</span><b>61,204 in &middot; 812 out</b></div>
+        <div class="kv"><span>cost</span><b>$0.195792</b></div>
+        <div class="kv"><span>prompt</span><b class="no">not stored</b></div>
+        <div class="kv"><span>key</span><b class="no">not stored</b></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="features" aria-labelledby="feat-h">
   <div class="board">
     <div class="tile head t62 rise">
@@ -184,6 +235,55 @@
     <div class="tile dark t62 rise">
       <div data-ui style="font-size:30px;left:44%;top:16%" aria-hidden="true"><span class="key">127.0.0.1</span></div>
       <div class="cap"><b>Nothing leaves</b><span>Keys pass through, never stored.</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="loop-cost" aria-labelledby="calc-h">
+  <div class="calc">
+    <div class="l">
+      <h2 id="calc-h" class="rise">What one stuck loop costs</h2>
+      <p class="rise">Set it to your agent and see what a loop costs when nobody is watching, and what it costs when Pitstop stops it at the fifth repeat.</p>
+      <form class="controls rise" id="calc" onsubmit="return false">
+        <label>Model <select id="k-model">
+          <option value="3,15">claude-sonnet-4-5 ($3 / $15)</option>
+          <option value="2,10">claude-sonnet-5-5 ($2 / $10)</option>
+          <option value="4,20">claude-opus-5-5 ($4 / $20)</option>
+          <option value="2.5,15">gpt-5.4 ($2.50 / $15)</option>
+          <option value="5,30">gpt-5.5 ($5 / $30)</option>
+        </select></label>
+        <label>Context sent with each call <output id="o-ctx">60,000 tokens</output>
+          <input type="range" id="k-ctx" min="10000" max="200000" step="5000" value="60000"></label>
+        <label>Calls per minute <output id="o-rate">4</output>
+          <input type="range" id="k-rate" min="1" max="20" step="1" value="4"></label>
+        <label>Hours nobody is watching <output id="o-hrs">8</output>
+          <input type="range" id="k-hrs" min="1" max="14" step="1" value="8"></label>
+      </form>
+    </div>
+    <div class="r rise" aria-live="polite">
+      <div class="out bad"><b id="r-without">$0</b><span>without Pitstop, over <span id="r-calls">0 calls</span></span></div>
+      <div class="out good"><b id="r-with">$0</b><span>with Pitstop: 4 calls, then stopped at the fifth repeat</span></div>
+      <p class="assume">Prices per million input / output tokens, from the providers' pages on 24 Nov 2026. Assumes every call re-sends the full context at the normal input price and writes 1,000 output tokens. Prompt caching would lower both numbers.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="compare" aria-labelledby="cmp-h">
+  <div class="cmp">
+    <h2 id="cmp-h" class="rise">A cap stops. Pitstop asks.</h2>
+    <div class="tablewrap rise">
+      <table>
+        <thead><tr><th scope="col"></th><th scope="col">Provider spend limit</th><th scope="col">A plain budget cap</th><th scope="col" class="us">Pitstop</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Limit per task</th><td>No, per workspace or month</td><td>Yes</td><td class="us">Yes, plus day and month</td></tr>
+          <tr><th scope="row">Checks before the call is sent</th><td>No</td><td>Depends on the tool</td><td class="us">Yes, worst case reserved first</td></tr>
+          <tr><th scope="row">Knows how far the task got</th><td>No</td><td>No</td><td class="us">Yes, from the agent's plan</td></tr>
+          <tr><th scope="row">Says what finishing will cost</th><td>No</td><td>No</td><td class="us">Yes, a likely range</td></tr>
+          <tr><th scope="row">Lets you continue on the spot</th><td>No</td><td>No</td><td class="us">Yes, one click</td></tr>
+          <tr><th scope="row">Keeps the work when it stops</th><td>No</td><td>No</td><td class="us">Yes, on a WIP branch</td></tr>
+          <tr><th scope="row">Catches loops</th><td>No</td><td>No</td><td class="us">Yes, at five repeats</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </section>
@@ -252,8 +352,8 @@
     <span style="height:100%">p</span><span style="height:72%">i</span><span style="height:88%">t</span><span style="height:64%">s</span><span style="height:94%">t</span><span style="height:76%">o</span><span style="height:100%">p</span>
   </div>
   <div class="links">
-    <div><b>Product</b><a href="#chart">How it pauses</a><a href="#features">Features</a><a href="#pricing">Pricing</a></div>
-    <div><b>Code</b><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall#readme">README</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall/issues">Issues</a></div>
+    <div><b>Product</b><a href="#chart">How it pauses</a><a href="#features">Features</a><a href="#loop-cost">Loop cost</a><a href="#pricing">Pricing</a></div>
+    <div><b>Code</b><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall">GitHub</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall#readme">README</a><a href="https://github.com/ShadowIzzHerZ/agent-spend-firewall/issues">Issues</a><a href="llms.txt">llms.txt</a></div>
     <div><b>Account</b><a href="login.html">Sign in</a><a href="login.html#signup">Join the Team plan list</a></div>
     <div class="contact"><b>Runs on your machine</b><span>Listens on 127.0.0.1:4546. Apache-2.0.</span><span>Chart drawn with <a href="https://www.tradingview.com/lightweight-charts/">TradingView Lightweight Charts</a> (Apache-2.0).</span></div>
   </div>
@@ -261,6 +361,6 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

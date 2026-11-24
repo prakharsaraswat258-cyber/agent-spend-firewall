@@ -215,6 +215,42 @@
   addEventListener('load', queueReveal);
   reveal();
 
+  /* ---------- hero install tabs, copy, GitHub stars ---------- */
+  const icmd = $('icmd');
+  document.querySelectorAll('.itabs button').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('.itabs button').forEach((x) => x.setAttribute('aria-selected', x === b));
+    icmd.textContent = b.dataset.cmd;
+    $('icopy').textContent = 'Copy';
+  }));
+  $('icopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(icmd.textContent); $('icopy').textContent = 'Copied'; }
+    catch { $('icopy').textContent = 'Select it'; }
+  });
+  // Real star count from the public GitHub API; nothing is shown if it fails.
+  fetch('https://api.github.com/repos/ShadowIzzHerZ/agent-spend-firewall')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j && typeof j.stargazers_count === 'number') $('stars').textContent = j.stargazers_count.toLocaleString() + ' stars'; })
+    .catch(() => {});
+
+  /* ---------- loop-cost calculator (prices per million tokens) ---------- */
+  const usd0 = (v) => '$' + (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
+  function calc() {
+    const [pin, pout] = $('k-model').value.split(',').map(Number);
+    const ctx = +$('k-ctx').value, rate = +$('k-rate').value, hrs = +$('k-hrs').value;
+    const perCall = (ctx * pin + 1000 * pout) / 1e6;
+    const calls = rate * 60 * hrs;
+    $('o-ctx').textContent = ctx.toLocaleString() + ' tokens';
+    $('o-rate').textContent = rate;
+    $('o-hrs').textContent = hrs;
+    $('r-calls').textContent = calls.toLocaleString() + ' calls';
+    for (const [id, v] of [['r-without', perCall * calls], ['r-with', perCall * 4]]) {
+      const el = $(id); el.textContent = usd0(v);
+      el.classList.add('bump'); setTimeout(() => el.classList.remove('bump'), 160);
+    }
+  }
+  ['k-model', 'k-ctx', 'k-rate', 'k-hrs'].forEach((id) => $(id).addEventListener('input', calc));
+  calc();
+
   /* ---------- setup dialog ---------- */
   let agent = 'claude';
   const cmd = $('cmd');
