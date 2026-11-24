@@ -150,6 +150,10 @@ func (p *Proxy) trackProgress(run string, body []byte) {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// /run/<id>/... carries the run id in the base URL, so any tool with a base-URL setting works.
+	if r.URL.Path == "/dashboard" {
+		Dashboard(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/pitstop/") {
 		p.Control(w, r)
 		return

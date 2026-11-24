@@ -76,6 +76,7 @@ func (l *Ledger) sum(q string, a any) (int64, error) {
 type Run struct {
 	ID, Repo, Branch, Agent, Dir, SessionID string
 	StepsDone, StepsTotal                   int
+	LastCall                                time.Time
 	Started                                 time.Time
 	CostMicro, Calls, Loops                 int64
 }
@@ -91,7 +92,8 @@ func (l *Ledger) StartRun(r Run) error {
 func (l *Ledger) Runs(limit int) ([]Run, error) {
 	rows, err := l.db.Query(`SELECT r.id, COALESCE(r.repo,''), COALESCE(r.branch,''), COALESCE(r.agent,''), r.started,
  COALESCE(SUM(c.cost_micro),0), COUNT(c.id),
- (SELECT COUNT(*) FROM loop_alerts a WHERE a.run_id=r.id)
+ (SELECT COUNT(*) FROM loop_alerts a WHERE a.run_id=r.id),
+ COALESCE(r.steps_done,0), COALESCE(r.steps_total,0), COALESCE(MAX(c.at),0)
 FROM runs r LEFT JOIN calls c ON c.run_id=r.id GROUP BY r.id ORDER BY r.started DESC, r.rowid DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -100,11 +102,11 @@ FROM runs r LEFT JOIN calls c ON c.run_id=r.id GROUP BY r.id ORDER BY r.started 
 	var out []Run
 	for rows.Next() {
 		var r Run
-		var t int64
-		if err := rows.Scan(&r.ID, &r.Repo, &r.Branch, &r.Agent, &t, &r.CostMicro, &r.Calls, &r.Loops); err != nil {
+		var t, lc int64
+		if err := rows.Scan(&r.ID, &r.Repo, &r.Branch, &r.Agent, &t, &r.CostMicro, &r.Calls, &r.Loops, &r.StepsDone, &r.StepsTotal, &lc); err != nil {
 			return nil, err
 		}
-		r.Started = time.Unix(t, 0)
+		r.Started, r.LastCall = time.Unix(t, 0), time.Unix(lc, 0)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -197,4 +199,29 @@ func (l *Ledger) SaveDecision(d Decision) error {
 	_, err := l.db.Exec(`INSERT INTO decisions(run_id,asked_at,reason,spent_micro,budget_micro,p50_micro,p90_micro,offered_micro,answer,added_micro,channel,response_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.Run, d.Asked.Unix(), d.Reason, d.Spent, d.Budget, d.P50, d.P90, d.Offered, d.Answer, d.Added, d.Channel, d.ResponseMS)
 	return err
+}
+
+type CallRow struct {
+	At                                   int64
+	Model                                string
+	Input, Output, CacheRead, CacheWrite int64
+	CostMicro                            int64
+}
+
+// Calls returns the newest calls of a run (metadata only).
+func (l *Ledger) Calls(run string, limit int) ([]CallRow, error) {
+	rows, err := l.db.Query(`SELECT at,model,input,output,cache_read,cache_write,cost_micro FROM calls WHERE run_id=? ORDER BY id DESC LIMIT ?`, run, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CallRow
+	for rows.Next() {
+		var c CallRow
+		if err := rows.Scan(&c.At, &c.Model, &c.Input, &c.Output, &c.CacheRead, &c.CacheWrite, &c.CostMicro); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

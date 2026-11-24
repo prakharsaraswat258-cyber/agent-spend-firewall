@@ -253,3 +253,22 @@ func TestControlRejectsForeignRequests(t *testing.T) {
 		t.Fatal("control endpoint guards wrong")
 	}
 }
+
+func TestDashboardAndOverview(t *testing.T) {
+	px, _, p := setupP(t, 0)
+	p.Decider = decide.New(time.Second)
+	resp, _ := http.Get(px.URL + "/dashboard")
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "Pitstop") || resp.Header.Get("Content-Security-Policy") == "" {
+		t.Fatal("dashboard page")
+	}
+	smallCall(px)
+	time.Sleep(50 * time.Millisecond)
+	req, _ := http.NewRequest("GET", px.URL+"/pitstop/overview", nil)
+	req.Header.Set("X-Pitstop", "1")
+	r2, _ := http.DefaultClient.Do(req)
+	b, _ = io.ReadAll(r2.Body)
+	if !strings.Contains(string(b), `"ID":"dc"`) || !strings.Contains(string(b), `"Spent":11475`) {
+		t.Fatalf("overview: %s", b)
+	}
+}

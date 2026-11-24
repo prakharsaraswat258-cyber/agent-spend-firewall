@@ -33,5 +33,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 
 Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.
 
-Not yet: "no code change in N steps" signal, dashboard, Telegram/phone channel, forecast accuracy score, per-repo budgets, Codex hook check.
+Not yet: "no code change in N steps" signal, Telegram/phone channel, forecast accuracy score, per-repo budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.
+
+- Dashboard: http://127.0.0.1:4546/dashboard (same port as the proxy). Today/month spend, waiting decision cards with Continue/Stop buttons, runs with step and money bars, click a run for its calls. Static page, no external requests; data comes from `/pitstop/*` with the guard header.
