@@ -23,11 +23,12 @@ type Guard struct {
 	S        Spent
 	Now      func() time.Time
 	reserved map[string]int64 // run -> reserved
+	runCap   map[string]int64 // per-run overrides after a human raised the budget
 	total    int64
 }
 
 func New(l Limits, s Spent) *Guard {
-	return &Guard{L: l, S: s, Now: time.Now, reserved: map[string]int64{}}
+	return &Guard{L: l, S: s, Now: time.Now, reserved: map[string]int64{}, runCap: map[string]int64{}}
 }
 
 type Denied struct {
@@ -52,7 +53,7 @@ func (g *Guard) Reserve(run string, need int64) error {
 		cap   int64
 		used  func() (int64, error)
 	}{
-		{"run", g.L.Run, func() (int64, error) { n, e := g.S.SpentRun(run); return n + g.reserved[run], e }},
+		{"run", g.runCapLocked(run), func() (int64, error) { n, e := g.S.SpentRun(run); return n + g.reserved[run], e }},
 		{"day", g.L.Day, func() (int64, error) {
 			n, e := g.S.SpentSince(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC))
 			return n + g.total, e
@@ -84,4 +85,27 @@ func (g *Guard) Release(run string, amt int64) {
 	defer g.mu.Unlock()
 	g.reserved[run] -= amt
 	g.total -= amt
+}
+
+func (g *Guard) runCapLocked(run string) int64 {
+	if c, ok := g.runCap[run]; ok {
+		return c
+	}
+	return g.L.Run
+}
+
+// RunCap is the run's current budget (0 = unlimited).
+func (g *Guard) RunCap(run string) int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.runCapLocked(run)
+}
+
+// Raise adds budget to one run. Day and month caps stay owner-only: no API here.
+func (g *Guard) Raise(run string, add int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if c := g.runCapLocked(run); c > 0 && add > 0 {
+		g.runCap[run] = c + add
+	}
 }

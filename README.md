@@ -28,7 +28,10 @@ export OPENAI_BASE_URL=http://127.0.0.1:4546/v1   # OpenAI-style
 - Progress + forecast: the proxy reads the agent's plan from the request history (Claude Code `TodoWrite`, or a `report_progress` tool call with `{done,total}`). Forecast = steps left x average cost per step x context-growth factor (1-2x); p90 = 2 x p50; "low" confidence until 3 steps are done. Each forecast is saved for later accuracy scoring.
 - `pitstop status [run]`: one line, usable as a Claude Code status line: `$3.20 / $5.00 · 3/8 steps · likely $5.33-$10.67 more · on track · medium confidence`. Says "WON'T FIT BUDGET" when spent >= 70% of budget and p50 > what is left. No plan seen means no forecast.
 
-Unconfirmed: Claude Code session-id capture and `claude --resume` against a real session.
+- Decision card: when the forecast says the run won't fit (>= 70% spent and p50 > left), or the run cap is hit, the proxy holds the call and shows progress, spend, likely range and confidence. Answer with `pitstop decide` (second terminal: Enter = Continue +offer, a number = Continue +$N, `s` = Stop & save) or the desktop popup (macOS osascript, Linux zenity). Continue raises that run's budget; Stop checkpoints to the WIP branch. No answer in `--pause-timeout` (default 10m) means stop; it never auto-continues. Day and month caps stay hard: no card, no raise. Every card and answer is logged in the `decisions` table.
+- Control API (`/pitstop/pending`, `/pitstop/answer`): loopback Host only and an `X-Pitstop: 1` header required, so web pages can't answer cards.
 
-Not yet: pause card, forecast, checkpoint, "no code change in N steps" signal, dashboard, per-run budgets, Codex hook check.
+Unconfirmed: the popup and `decide` against a real agent (tested with a fake upstream only); the held request surviving a 10 minute wait in Claude Code (client timeouts unknown); Claude Code session-id capture and `claude --resume` against a real session.
+
+Not yet: checkpoint, "no code change in N steps" signal, dashboard, per-run budgets, Codex hook check.
 Not verified: cost vs provider console (needs 20 real runs), real Claude Code session.

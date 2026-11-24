@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/proxy"
@@ -36,10 +37,12 @@ func main() {
 		os.Exit(resumeCmd(cfg, os.Args[2:]))
 	case "status":
 		os.Exit(statusCmd(cfg, os.Args[2:]))
+	case "decide":
+		os.Exit(decideCmd(cfg))
 	case "runs":
 		os.Exit(runsCmd(cfg))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run]")
+		fmt.Fprintln(os.Stderr, "usage: pitstop init [--budget USD] | serve [flags] | run -- <cmd> | runs | checkpoint <run> | resume <run> | status [run] | decide")
 		os.Exit(2)
 	}
 }
@@ -52,6 +55,7 @@ func serve(cfg Config) {
 	runCap := fs.Float64("run-cap", cfg.BudgetUSD, "per-run cap, USD (0 = off)")
 	dayCap := fs.Float64("day-cap", 0, "per-day cap, USD (0 = off)")
 	monthCap := fs.Float64("month-cap", 0, "per-month cap, USD (0 = off)")
+	to := fs.Duration("pause-timeout", 10*time.Minute, "no answer to a pause card in this time: stop and save")
 	fs.Parse(os.Args[2:])
 
 	tb := price.Default()
@@ -78,6 +82,19 @@ func serve(cfg Config) {
 		Guard:      caps.New(caps.Limits{Run: m(*runCap), Day: m(*dayCap), Month: m(*monthCap)}, l),
 		DefaultRun: "session-" + time.Now().Format("20060102-150405")}
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	dec := decide.New(*to)
+	dec.Notify = func(c decide.Card) { desktopNotify(cfg, c, *to) }
+	dec.Log = func(c decide.Card, a decide.Answer, d time.Duration) {
+		ans := "stop"
+		if a.Continue {
+			ans = "continue"
+		} else if a.TimedOut {
+			ans = "timeout"
+		}
+		l.SaveDecision(ledger.Decision{Run: c.Run, Reason: c.Reason, Answer: ans, Channel: a.Channel, Asked: c.Asked, Spent: c.Spent,
+			Budget: c.Budget, P50: c.P50, P90: c.P90, Offered: c.Offer, Added: a.Add, ResponseMS: d.Milliseconds()})
+	}
+	p.Decider = dec
 	log.Printf("pitstop on http://%s (prices %s, run cap $%.2f). Set ANTHROPIC_BASE_URL / OPENAI_BASE_URL to it.", *addr, tb.Version, *runCap)
 	http.Handle("/", p)
 	log.Fatal(http.ListenAndServe(*addr, nil))

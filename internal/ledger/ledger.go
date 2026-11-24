@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS calls(
  input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER,
  cost_micro INTEGER, latency_ms INTEGER, at INTEGER);
 CREATE TABLE IF NOT EXISTS loop_alerts(id INTEGER PRIMARY KEY, run_id TEXT, at INTEGER, kind TEXT, tool TEXT, repeats INTEGER, action TEXT);
+CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, run_id TEXT, asked_at INTEGER, reason TEXT, spent_micro INTEGER, budget_micro INTEGER, p50_micro INTEGER, p90_micro INTEGER, offered_micro INTEGER, answer TEXT, added_micro INTEGER, channel TEXT, response_ms INTEGER);
 CREATE INDEX IF NOT EXISTS calls_run ON calls(run_id);
 CREATE INDEX IF NOT EXISTS calls_at ON calls(at);`)
 	if err != nil {
@@ -183,5 +184,17 @@ func (l *Ledger) CallCosts(run string) ([]int64, error) {
 func (l *Ledger) SaveForecast(run string, spent, p50, p90 int64, conf string, done, total int) error {
 	_, err := l.db.Exec(`INSERT INTO forecasts(run_id,at,spent_micro,p50_micro,p90_micro,confidence,steps_done,steps_total) VALUES(?,?,?,?,?,?,?,?)`,
 		run, time.Now().Unix(), spent, p50, p90, conf, done, total)
+	return err
+}
+
+type Decision struct {
+	Run, Reason, Answer, Channel                        string
+	Asked                                               time.Time
+	Spent, Budget, P50, P90, Offered, Added, ResponseMS int64
+}
+
+func (l *Ledger) SaveDecision(d Decision) error {
+	_, err := l.db.Exec(`INSERT INTO decisions(run_id,asked_at,reason,spent_micro,budget_micro,p50_micro,p90_micro,offered_micro,answer,added_micro,channel,response_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.Run, d.Asked.Unix(), d.Reason, d.Spent, d.Budget, d.P50, d.P90, d.Offered, d.Answer, d.Added, d.Channel, d.ResponseMS)
 	return err
 }

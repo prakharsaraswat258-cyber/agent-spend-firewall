@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/price"
 )
@@ -26,6 +27,11 @@ data: {"type":"message_delta","usage":{"output_tokens":500}}
 `
 
 func setup(t *testing.T, runCap int64) (*httptest.Server, *ledger.Ledger) {
+	px, l, _ := setupP(t, runCap)
+	return px, l
+}
+
+func setupP(t *testing.T, runCap int64) (*httptest.Server, *ledger.Ledger, *Proxy) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, sse)
@@ -40,7 +46,7 @@ func setup(t *testing.T, runCap int64) (*httptest.Server, *ledger.Ledger) {
 		Anthropic: u, OpenAI: u, DefaultRun: "r1"}
 	px := httptest.NewServer(p)
 	t.Cleanup(px.Close)
-	return px, l
+	return px, l, p
 }
 
 func post(px *httptest.Server) (*http.Response, string) {
@@ -174,5 +180,76 @@ func TestProgressTracked(t *testing.T) {
 	r, err := l.GetRun("pg")
 	if err != nil || r.StepsDone != 3 || r.StepsTotal != 5 {
 		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+func smallCall(px *httptest.Server) int {
+	resp, _ := http.Post(px.URL+"/run/dc/v1/messages", "application/json",
+		strings.NewReader(`{"model":"claude-sonnet-4","max_tokens":1000,"stream":true,"messages":[]}`))
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+func TestCardOnCapContinueRaisesBudget(t *testing.T) {
+	px, _, p := setupP(t, 20_000)
+	p.Decider = decide.New(5 * time.Second)
+	if smallCall(px) != 200 {
+		t.Fatal("first call fits")
+	}
+	time.Sleep(50 * time.Millisecond) // ledger write lands after EOF
+	done := make(chan int)
+	go func() { done <- smallCall(px) }() // would exceed cap: must pause, not fail
+	var c decide.Card
+	for i := 0; i < 200 && c.ID == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if ps := p.Decider.Pending(); len(ps) == 1 {
+			c = ps[0]
+		}
+	}
+	if c.ID == "" || c.Reason != "cap" {
+		t.Fatalf("no cap card: %+v", c)
+	}
+	select {
+	case <-done:
+		t.Fatal("call must wait for the human")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := p.Respond(c.ID, true, 1_000_000, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-done; code != 200 {
+		t.Fatalf("after Continue: %d", code)
+	}
+	if p.Guard.RunCap("dc") != 1_020_000 {
+		t.Fatalf("cap %d", p.Guard.RunCap("dc"))
+	}
+}
+
+func TestCardTimeoutStopsAndSaves(t *testing.T) {
+	px, _, p := setupP(t, 20_000)
+	p.Decider = decide.New(80 * time.Millisecond)
+	smallCall(px)
+	time.Sleep(50 * time.Millisecond)
+	if c := smallCall(px); c != 429 {
+		t.Fatalf("no answer must stop, got %d", c)
+	}
+}
+
+func TestControlRejectsForeignRequests(t *testing.T) {
+	px, _, p := setupP(t, 0)
+	p.Decider = decide.New(time.Second)
+	get := func(host, hdr string) int {
+		req, _ := http.NewRequest("GET", px.URL+"/pitstop/pending", nil)
+		if host != "" {
+			req.Host = host
+		}
+		if hdr != "" {
+			req.Header.Set("X-Pitstop", hdr)
+		}
+		resp, _ := http.DefaultClient.Do(req)
+		return resp.StatusCode
+	}
+	if get("", "") != 403 || get("evil.com", "1") != 403 || get("", "1") != 200 {
+		t.Fatal("control endpoint guards wrong")
 	}
 }

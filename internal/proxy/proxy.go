@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/caps"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/checkpoint"
+	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/decide"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/forecast"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/ledger"
 	"github.com/ShadowIzzHerZ/agent-spend-firewall/internal/loop"
@@ -34,6 +36,7 @@ type Proxy struct {
 	Anthropic  *url.URL
 	OpenAI     *url.URL
 	DefaultRun string
+	Decider    *decide.Decider // nil: no pause card, caps block with 429
 }
 
 var sessionRe = regexp.MustCompile(`session_([0-9a-fA-F-]{36})`)
@@ -51,6 +54,81 @@ func (p *Proxy) save(run, reason string) string {
 	}
 	_ = p.Ledger.SaveCheckpoint(run, br, c, reason)
 	return fmt.Sprintf(" Work saved on branch %s. Resume: pitstop resume %s", br, run)
+}
+
+// admit reserves the call's worst-case cost, pausing on a decision card first when
+// the forecast says the run will not fit, or the run cap is hit.
+func (p *Proxy) admit(run string, need int64) error {
+	if p.Decider == nil {
+		return p.Guard.Reserve(run, need)
+	}
+	for i := 0; i < 3; i++ {
+		if c, ok := p.forecastCard(run); ok {
+			if err := p.ask(run, c); err != nil {
+				return err
+			}
+			continue // budget raised: re-check
+		}
+		err := p.Guard.Reserve(run, need)
+		var d *caps.Denied
+		if errors.As(err, &d) && d.Scope == "run" {
+			c := p.baseCard(run, "cap")
+			c.Spent, c.Budget = d.Used, d.Cap
+			c.Offer = max(d.Cap/2, d.Need) // no plan: offer half the budget again
+			if err := p.ask(run, c); err != nil {
+				return err
+			}
+			continue
+		}
+		return err // nil (reserved) or a day/month cap: owner-only, no card
+	}
+	return errors.New("run budget still exhausted after 3 approvals")
+}
+
+func (p *Proxy) baseCard(run, reason string) decide.Card {
+	spent, _ := p.Ledger.SpentRun(run)
+	return decide.Card{Run: run, Reason: reason, Spent: spent, Budget: p.Guard.RunCap(run)}
+}
+
+func (p *Proxy) forecastCard(run string) (decide.Card, bool) {
+	c := p.baseCard(run, "forecast")
+	r, err := p.Ledger.GetRun(run)
+	if err != nil || r.StepsTotal == 0 {
+		return c, false
+	}
+	costs, _ := p.Ledger.CallCosts(run)
+	f := forecast.Compute(c.Spent, costs, r.StepsDone, r.StepsTotal)
+	if !forecast.WillOverrun(c.Spent, c.Budget, f) {
+		return c, false
+	}
+	c.P50, c.P90, c.Confidence, c.Done, c.Total = f.P50, f.P90, f.Confidence, r.StepsDone, r.StepsTotal
+	c.Offer = max(c.Spent+f.P90-c.Budget, 1) // raise budget enough to cover the p90 finish
+	return c, true
+}
+
+// ask pauses the call. nil means Continue (budget already raised); an error means stop.
+func (p *Proxy) ask(run string, c decide.Card) error {
+	a := p.Decider.Ask(c)
+	if a.Continue {
+		return nil
+	}
+	if a.TimedOut {
+		return errors.New("no answer to the pause card in time: stopped (never auto-continues).")
+	}
+	return errors.New("you chose Stop.")
+}
+
+// Respond answers a pending card. Continue raises the run budget by add.
+func (p *Proxy) Respond(id string, cont bool, add int64, channel string) error {
+	c, ok := p.Decider.Card(id)
+	if !ok {
+		return errors.New("no such pending card")
+	}
+	if cont {
+		p.Guard.Raise(c.Run, add)
+	}
+	p.Decider.Resolve(id, decide.Answer{Continue: cont, Add: add, Channel: channel})
+	return nil
 }
 
 // trackProgress stores the agent's plan state and saves a forecast whenever a step completes.
@@ -72,6 +150,10 @@ func (p *Proxy) trackProgress(run string, body []byte) {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// /run/<id>/... carries the run id in the base URL, so any tool with a base-URL setting works.
+	if strings.HasPrefix(r.URL.Path, "/pitstop/") {
+		p.Control(w, r)
+		return
+	}
 	runID := ""
 	if rest, ok := strings.CutPrefix(r.URL.Path, "/run/"); ok {
 		id, path, _ := strings.Cut(rest, "/")
@@ -142,8 +224,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := p.Guard.Reserve(run, need); err != nil {
-		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error()+p.save(run, "cap"))
+	if err := p.admit(run, need); err != nil {
+		fail(w, provider, 429, "Pitstop blocked this call: "+err.Error()+p.save(run, "stop"))
 		return
 	}
 	defer p.Guard.Release(run, need)
